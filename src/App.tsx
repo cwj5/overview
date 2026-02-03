@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Viewer3D from "./components/Viewer3D";
+import { LogViewer } from "./components/LogViewer";
+import { logger } from "./utils/logger";
 import "./App.css";
 
 interface FileMetadata {
@@ -19,23 +21,29 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
+  const [showLogs, setShowLogs] = useState(false);
 
   async function loadFile() {
     try {
       setLoading(true);
       setError("");
+      logger.info("Opening file dialog...", "App");
 
       // Open file dialog
       const filePath = await invoke<string | null>("open_file_dialog");
 
       if (!filePath) {
         setLoading(false);
+        logger.debug("File dialog cancelled", "App");
         return; // User cancelled
       }
+
+      logger.info(`Loading file: ${filePath}`, "App");
 
       // Load the PLOT3D file
       const data = await invoke("load_plot3d_file", { path: filePath });
       setGridData(data);
+      logger.info(`Successfully loaded grid data`, "App");
 
       // Extract metadata
       const fileName = filePath.split(/[/\\]/).pop() || filePath;
@@ -54,8 +62,11 @@ function App() {
       }
 
       setFileMetadata(metadata);
+      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`, "App");
     } catch (e) {
-      setError(String(e));
+      const errorMsg = String(e);
+      setError(errorMsg);
+      logger.error(errorMsg, "App");
     } finally {
       setLoading(false);
     }
@@ -65,19 +76,24 @@ function App() {
     try {
       setLoading(true);
       setError("");
+      logger.info("Opening multiple files dialog...", "App");
 
       // Open file dialog for multiple files
       const filePaths = await invoke<string[]>("open_multiple_files_dialog");
 
       if (!filePaths || filePaths.length === 0) {
         setLoading(false);
+        logger.debug("Multiple files dialog cancelled", "App");
         return; // User cancelled or no files selected
       }
+
+      logger.info(`Loading ${filePaths.length} file(s)...`, "App");
 
       // For now, just load the first file
       // TODO: Handle multiple files properly
       const data = await invoke("load_plot3d_file", { path: filePaths[0] });
       setGridData(data);
+      logger.info(`Successfully loaded first file`, "App");
 
       const fileName = filePaths[0].split(/[/\\]/).pop() || filePaths[0];
       const metadata: FileMetadata = {
@@ -94,8 +110,11 @@ function App() {
       }
 
       setFileMetadata(metadata);
+      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`, "App");
     } catch (e) {
-      setError(String(e));
+      const errorMsg = String(e);
+      setError(errorMsg);
+      logger.error(errorMsg, "App");
     } finally {
       setLoading(false);
     }
@@ -144,6 +163,19 @@ function App() {
           >
             Open Multiple Files
           </button>
+          <button
+            onClick={() => setShowLogs(!showLogs)}
+            style={{
+              padding: '8px 16px',
+              cursor: 'pointer',
+              background: showLogs ? '#10b981' : '#6b7280',
+              border: 'none',
+              borderRadius: '4px',
+              color: 'white'
+            }}
+          >
+            {showLogs ? 'Hide Logs' : 'Show Logs'}
+          </button>
         </div>
         {error && <span style={{ color: '#ef4444', fontSize: '14px' }}>{error}</span>}
         {fileMetadata && (
@@ -167,8 +199,11 @@ function App() {
         )}
       </header>
 
-      <main style={{ flex: 1, position: 'relative' }}>
-        <Viewer3D gridData={gridData} />
+      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <Viewer3D gridData={gridData} />
+        </div>
+        {showLogs && <LogViewer isOpen={showLogs} onClose={() => setShowLogs(false)} />}
       </main>
     </div>
   );

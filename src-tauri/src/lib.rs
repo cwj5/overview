@@ -1,5 +1,7 @@
+mod logger;
 mod plot3d;
 
+use logger::{clear_logs, get_logs, log_debug, log_error, log_info, LogEntry};
 use plot3d::{
     read_plot3d_function, read_plot3d_grid, read_plot3d_grid_ascii, read_plot3d_solution,
     read_plot3d_solution_ascii, Plot3DFunction, Plot3DGrid, Plot3DSolution,
@@ -16,31 +18,106 @@ fn greet(name: &str) -> String {
 /// Load PLOT3D grid file (auto-detects binary format)
 #[tauri::command]
 fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
-    read_plot3d_grid(path).map_err(|e| e.to_string())
+    log_debug(&format!("Loading PLOT3D grid file: {}", path));
+    match read_plot3d_grid(&path) {
+        Ok(grids) => {
+            log_info(&format!(
+                "Successfully loaded {} grid(s) from {}",
+                grids.len(),
+                path
+            ));
+            Ok(grids)
+        }
+        Err(e) => {
+            let error_msg = format!("Error loading PLOT3D file: {}", e);
+            log_error(&error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 /// Load PLOT3D grid file in ASCII format
 #[tauri::command]
 fn load_plot3d_file_ascii(path: String) -> Result<Vec<Plot3DGrid>, String> {
-    read_plot3d_grid_ascii(path).map_err(|e| e.to_string())
+    log_debug(&format!("Loading ASCII PLOT3D grid file: {}", path));
+    match read_plot3d_grid_ascii(&path) {
+        Ok(grids) => {
+            log_info(&format!(
+                "Successfully loaded {} ASCII grid(s) from {}",
+                grids.len(),
+                path
+            ));
+            Ok(grids)
+        }
+        Err(e) => {
+            let error_msg = format!("Error loading ASCII PLOT3D file: {}", e);
+            log_error(&error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 /// Load PLOT3D solution file (Q file) in binary format
 #[tauri::command]
 fn load_plot3d_solution(path: String) -> Result<Vec<Plot3DSolution>, String> {
-    read_plot3d_solution(path).map_err(|e| e.to_string())
+    log_debug(&format!("Loading PLOT3D solution file: {}", path));
+    match read_plot3d_solution(&path) {
+        Ok(solutions) => {
+            log_info(&format!(
+                "Successfully loaded {} solution(s) from {}",
+                solutions.len(),
+                path
+            ));
+            Ok(solutions)
+        }
+        Err(e) => {
+            let error_msg = format!("Error loading PLOT3D solution file: {}", e);
+            log_error(&error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 /// Load PLOT3D solution file (Q file) in ASCII format
 #[tauri::command]
 fn load_plot3d_solution_ascii(path: String) -> Result<Vec<Plot3DSolution>, String> {
-    read_plot3d_solution_ascii(path).map_err(|e| e.to_string())
+    log_debug(&format!("Loading ASCII PLOT3D solution file: {}", path));
+    match read_plot3d_solution_ascii(&path) {
+        Ok(solutions) => {
+            log_info(&format!(
+                "Successfully loaded {} ASCII solution(s) from {}",
+                solutions.len(),
+                path
+            ));
+            Ok(solutions)
+        }
+        Err(e) => {
+            let error_msg = format!("Error loading ASCII PLOT3D solution file: {}", e);
+            log_error(&error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 /// Load PLOT3D function file (F file) in binary format
 #[tauri::command]
 fn load_plot3d_function(path: String) -> Result<Vec<Plot3DFunction>, String> {
-    read_plot3d_function(path).map_err(|e| e.to_string())
+    log_debug(&format!("Loading PLOT3D function file: {}", path));
+    match read_plot3d_function(&path) {
+        Ok(functions) => {
+            log_info(&format!(
+                "Successfully loaded {} function file(s) from {}",
+                functions.len(),
+                path
+            ));
+            Ok(functions)
+        }
+        Err(e) => {
+            let error_msg = format!("Error loading PLOT3D function file: {}", e);
+            log_error(&error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 #[tauri::command]
@@ -106,8 +183,25 @@ fn detect_file_format(path: String) -> Result<String, String> {
     }
 }
 
+/// Get all log entries
+#[tauri::command]
+fn get_log_entries() -> Result<Vec<LogEntry>, String> {
+    Ok(get_logs())
+}
+
+/// Clear all log entries
+#[tauri::command]
+fn clear_log_entries() -> Result<(), String> {
+    clear_logs();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize logging
+    logger::init_logger();
+    log_info("Application started");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -121,6 +215,8 @@ pub fn run() {
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,
+            get_log_entries,
+            clear_log_entries,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
