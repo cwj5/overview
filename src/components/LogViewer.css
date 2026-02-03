@@ -1,84 +1,84 @@
 .log-drawer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 300px;
-  background: #1e1e1e;
-  border-top: 1px solid #333;
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
-  display: flex;
-  flex-direction: column;
-  z-index: 998;
-  transition: transform 0.3s ease-in-out;
-  transform: translateY(100%);
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 300px;
+    background: #1e1e1e;
+    border-top: 1px solid #333;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    z-index: 998;
+    transition: transform 0.3s ease-in-out;
+    transform: translateY(100%);
 }
 
 .log-drawer.open {
-  transform: translateY(0);
+    transform: translateY(0);
 }
 
 .log-drawer.closed {
-  transform: translateY(100%);
-  pointer-events: none;
+    transform: translateY(100%);
+    pointer-events: none;
 }
 
 .log-tab {
-  position: fixed;
-  bottom: 0;
-  right: 20px;
-  padding: 10px 16px;
-  background: #2d2d2d;
-  color: #e0e0e0;
-  border: 1px solid #444;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  cursor: pointer;
-  font-size: 12px;
-  font-family: inherit;
-  z-index: 999;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
+    position: fixed;
+    bottom: 0;
+    right: 20px;
+    padding: 10px 16px;
+    background: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #444;
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    z-index: 999;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
 }
 
 .log-tab:hover {
-  background: #3a3a3a;
-  border-color: #555;
+    background: #3a3a3a;
+    border-color: #555;
 }
 
 .log-tab-icon {
-  font-size: 14px;
+    font-size: 14px;
 }
 
 .log-tab-text {
-  font-weight: 500;
+    font-weight: 500;
 }
 
 .log-tab-badge {
-  display: inline-block;
-  min-width: 20px;
-  padding: 2px 6px;
-  background: #4a90e2;
-  color: white;
-  border-radius: 10px;
-  font-size: 10px;
-  font-weight: 600;
-  text-align: center;
+    display: inline-block;
+    min-width: 20px;
+    padding: 2px 6px;
+    background: #4a90e2;
+    color: white;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
 }
 
 .log-viewer {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: #1e1e1e;
-  color: #e0e0e0;
-  border: none;
-  border-radius: 0;
-  font-family: "Courier New", monospace;
-  font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: none;
+    border-radius: 0;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
 }
 
 .log-header {

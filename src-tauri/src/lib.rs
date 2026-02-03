@@ -3,8 +3,8 @@ mod plot3d;
 
 use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, LogEntry};
 use plot3d::{
-    read_plot3d_function, read_plot3d_grid, read_plot3d_grid_ascii, read_plot3d_solution,
-    read_plot3d_solution_ascii, Plot3DFunction, Plot3DGrid, Plot3DSolution,
+    read_plot3d_function, read_plot3d_grid_ascii, read_plot3d_grid_with_metadata,
+    read_plot3d_solution, read_plot3d_solution_ascii, Plot3DFunction, Plot3DGrid, Plot3DSolution,
 };
 use std::path::Path;
 use tauri_plugin_dialog::DialogExt;
@@ -19,13 +19,22 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
     log_debug(&format!("Loading PLOT3D grid file: {}", path));
-    match read_plot3d_grid(&path) {
-        Ok(grids) => {
+    match read_plot3d_grid_with_metadata(&path) {
+        Ok((grids, metadata)) => {
+            let dims_str = metadata
+                .grid_dimensions
+                .iter()
+                .enumerate()
+                .map(|(idx, d)| format!("Grid {} ({}×{}×{})", idx, d.i, d.j, d.k))
+                .collect::<Vec<_>>()
+                .join(", ");
+
             log_info(&format!(
-                "Successfully loaded {} grid(s) from {}",
-                grids.len(),
-                path
+                "Detected byte order: {} (auto-detected)",
+                metadata.byte_order
             ));
+            log_info(&format!("Loaded {} grid(s): {}", metadata.num_grids, dims_str));
+
             Ok(grids)
         }
         Err(e) => {

@@ -12,6 +12,15 @@ pub struct Plot3DGrid {
     pub z_coords: Vec<f32>,
 }
 
+/// File metadata about the loaded grid
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridFileMetadata {
+    pub byte_order: String, // "Little-Endian" or "Big-Endian"
+    pub is_detected: bool,  // true if auto-detected, false if assumed
+    pub num_grids: usize,
+    pub grid_dimensions: Vec<GridDimensions>,
+}
+
 /// Represents PLOT3D solution data (Q file)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plot3DSolution {
@@ -145,6 +154,77 @@ pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> 
     }
 
     Ok(grids)
+}
+
+/// Read PLOT3D grid file with metadata about byte order and dimensions
+pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
+    path: P,
+) -> io::Result<(Vec<Plot3DGrid>, GridFileMetadata)> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+
+    // Detect byte order from first dimension
+    let byte_order = detect_byte_order(&mut reader)?;
+    let byte_order_str = match byte_order {
+        ByteOrder::LittleEndian => "Little-Endian",
+        ByteOrder::BigEndian => "Big-Endian",
+    };
+
+    // Read number of grids
+    let num_grids = read_i32(&mut reader, byte_order)?;
+    if num_grids <= 0 || num_grids > 1000 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid number of grids: {}", num_grids),
+        ));
+    }
+
+    let mut grids = Vec::with_capacity(num_grids as usize);
+    let mut grid_dimensions = Vec::with_capacity(num_grids as usize);
+
+    // Read dimensions for all grids first (PLOT3D whole format)
+    let mut dimensions_list = Vec::with_capacity(num_grids as usize);
+    for _ in 0..num_grids {
+        let i = read_i32(&mut reader, byte_order)? as usize;
+        let j = read_i32(&mut reader, byte_order)? as usize;
+        let k = read_i32(&mut reader, byte_order)? as usize;
+
+        if i == 0 || j == 0 || k == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid dimensions: {}x{}x{}", i, j, k),
+            ));
+        }
+
+        let dims = GridDimensions { i, j, k };
+        grid_dimensions.push(dims.clone());
+        dimensions_list.push(dims);
+    }
+
+    // Read coordinate data for each grid
+    for dims in dimensions_list {
+        let total_points = dims.i * dims.j * dims.k;
+
+        let x_coords = read_f32_array(&mut reader, total_points, byte_order)?;
+        let y_coords = read_f32_array(&mut reader, total_points, byte_order)?;
+        let z_coords = read_f32_array(&mut reader, total_points, byte_order)?;
+
+        grids.push(Plot3DGrid {
+            dimensions: dims,
+            x_coords,
+            y_coords,
+            z_coords,
+        });
+    }
+
+    let metadata = GridFileMetadata {
+        byte_order: byte_order_str.to_string(),
+        is_detected: true,
+        num_grids: num_grids as usize,
+        grid_dimensions,
+    };
+
+    Ok((grids, metadata))
 }
 
 /// Read PLOT3D grid file in ASCII format
