@@ -33,7 +33,10 @@ fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
                 "Detected byte order: {} (auto-detected)",
                 metadata.byte_order
             ));
-            log_info(&format!("Loaded {} grid(s): {}", metadata.num_grids, dims_str));
+            log_info(&format!(
+                "Loaded {} grid(s): {}",
+                metadata.num_grids, dims_str
+            ));
 
             Ok(grids)
         }

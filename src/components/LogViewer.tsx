@@ -30,9 +30,30 @@ export const LogViewer: React.FC<LogViewerProps> = ({
         });
 
         // Get initial logs
-        setLogs(logger.getLogs());
+        const loadInitialLogs = async () => {
+            const backendLogs = await logger.fetchBackendLogs();
+            // Merge backend logs with frontend logs
+            const mergedLogs = [...backendLogs, ...logger.getLogs()].sort((a, b) => {
+                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            });
+            setLogs(mergedLogs);
+        };
 
-        return unsubscribe;
+        loadInitialLogs();
+
+        // Poll for backend logs every 500ms
+        const interval = setInterval(async () => {
+            const backendLogs = await logger.fetchBackendLogs();
+            const mergedLogs = [...backendLogs, ...logger.getLogs()].sort((a, b) => {
+                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            });
+            setLogs(mergedLogs);
+        }, 500);
+
+        return () => {
+            clearInterval(interval);
+            unsubscribe();
+        };
     }, []);
 
     useEffect(() => {
@@ -89,7 +110,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             return path;
         } catch {
             // Fallback to home directory or temp
-            return process.env.HOME || "/tmp";
+            return "~/Downloads";
         }
     };
 
