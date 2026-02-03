@@ -258,14 +258,25 @@
 .log-timestamp {
     flex-shrink: 0;
     color: #888;
-    min-width: 130px;
+    min-width: 145px;
+    font-family: monospace;
+    font-size: 11px;
 }
 
 .log-level {
     flex-shrink: 0;
     font-weight: 600;
-    min-width: 60px;
+    min-width: 50px;
     text-align: center;
+    font-size: 10px;
+}
+
+.log-source {
+    flex-shrink: 0;
+    font-weight: 500;
+    min-width: 55px;
+    text-align: center;
+    font-size: 10px;
 }
 
 .log-module {

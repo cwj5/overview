@@ -7,6 +7,7 @@ export interface LogEntry {
     level: LogLevel;
     message: string;
     module?: string;
+    source: "frontend" | "backend";
 }
 
 /**
@@ -48,19 +49,20 @@ class Logger {
      * Add a log entry and notify listeners
      */
     private addLog(level: LogLevel, message: string, module?: string) {
+        const now = new Date();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        const hour = String(now.getHours()).padStart(2, "0");
+        const minute = String(now.getMinutes()).padStart(2, "0");
+        const second = String(now.getSeconds()).padStart(2, "0");
+        const timestamp = `${month}-${day} | ${hour}:${minute}:${second}`;
+
         const entry: LogEntry = {
-            timestamp: new Date().toLocaleString("en-US", {
-                year: "numeric",
-                month: "2-digit",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: false,
-            }),
+            timestamp,
             level,
             message,
             module,
+            source: "frontend",
         };
 
         this.logs.push(entry);

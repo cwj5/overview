@@ -215,7 +215,10 @@ export const LogViewer: React.FC<LogViewerProps> = ({
                                         className="log-level"
                                         style={{ color: getLevelColor(log.level) }}
                                     >
-                                        {log.level}
+                                        {log.level.toLowerCase()}
+                                    </span>
+                                    <span className="log-source" style={{ color: log.source === "backend" ? "#9c27b0" : "#4a90e2" }}>
+                                        {log.source}
                                     </span>
                                     {log.module && <span className="log-module">{log.module}</span>}
                                     <span className="log-message">{log.message}</span>
