@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use std::fs;
 use std::io::Write;
+use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::filter::EnvFilter;
 

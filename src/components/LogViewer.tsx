@@ -5,18 +5,23 @@ import "./LogViewer.css";
 
 interface LogViewerProps {
     isOpen?: boolean;
-    onClose?: () => void;
+    onToggle?: (open: boolean) => void;
 }
 
 export const LogViewer: React.FC<LogViewerProps> = ({
-    isOpen = true,
-    onClose,
+    isOpen = false,
+    onToggle,
 }) => {
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [filter, setFilter] = useState<string>("");
     const [levelFilter, setLevelFilter] = useState<string>("ALL");
     const [autoScroll, setAutoScroll] = useState(true);
+    const [isDrawerOpen, setIsDrawerOpen] = useState(isOpen);
     const logsEndRef = React.useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        setIsDrawerOpen(isOpen);
+    }, [isOpen]);
 
     useEffect(() => {
         // Subscribe to log updates
@@ -36,6 +41,12 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             logsEndRef.current.scrollIntoView({ behavior: "smooth" });
         }
     }, [logs, autoScroll]);
+
+    const handleToggle = () => {
+        const newState = !isDrawerOpen;
+        setIsDrawerOpen(newState);
+        onToggle?.(newState);
+    };
 
     const handleClear = async () => {
         if (confirm("Clear all logs?")) {
@@ -105,98 +116,110 @@ export const LogViewer: React.FC<LogViewerProps> = ({
         return matchesText && matchesLevel;
     });
 
-    if (!isOpen) {
-        return null;
-    }
-
     return (
-        <div className="log-viewer">
-            <div className="log-header">
-                <h3>System Logs</h3>
-                <button
-                    className="log-close-btn"
-                    onClick={onClose}
-                    title="Close log viewer"
-                >
-                    ✕
-                </button>
-            </div>
-
-            <div className="log-controls">
-                <input
-                    type="text"
-                    placeholder="Filter logs..."
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    className="log-filter"
-                />
-
-                <select
-                    value={levelFilter}
-                    onChange={(e) => setLevelFilter(e.target.value)}
-                    className="log-level-filter"
-                >
-                    <option value="ALL">All Levels</option>
-                    <option value="DEBUG">Debug</option>
-                    <option value="INFO">Info</option>
-                    <option value="WARN">Warning</option>
-                    <option value="ERROR">Error</option>
-                </select>
-
-                <label className="log-autoscroll">
-                    <input
-                        type="checkbox"
-                        checked={autoScroll}
-                        onChange={(e) => setAutoScroll(e.target.checked)}
-                    />
-                    Auto-scroll
-                </label>
-
-                <button onClick={handleFetchBackendLogs} className="log-action-btn">
-                    Fetch Backend
-                </button>
-
-                <button onClick={handleExportLogs} className="log-export-btn">
-                    Export
-                </button>
-
-                <button onClick={handleClear} className="log-clear-btn">
-                    Clear
-                </button>
-            </div>
-
-            <div className="log-entries">
-                {filteredLogs.length === 0 ? (
-                    <div className="log-empty">
-                        {logs.length === 0
-                            ? "No logs yet"
-                            : "No logs match the current filters"}
-                    </div>
-                ) : (
-                    filteredLogs.map((log, index) => (
-                        <div
-                            key={index}
-                            className={`log-entry log-${log.level.toLowerCase()}`}
-                            style={{ borderLeftColor: getLevelColor(log.level) }}
+        <>
+            {/* Drawer container */}
+            <div className={`log-drawer ${isDrawerOpen ? "open" : "closed"}`}>
+                <div className="log-viewer">
+                    <div className="log-header">
+                        <h3>System Logs</h3>
+                        <button
+                            className="log-close-btn"
+                            onClick={handleToggle}
+                            title="Close log viewer"
                         >
-                            <span className="log-timestamp">{log.timestamp}</span>
-                            <span
-                                className="log-level"
-                                style={{ color: getLevelColor(log.level) }}
-                            >
-                                {log.level}
-                            </span>
-                            {log.module && <span className="log-module">{log.module}</span>}
-                            <span className="log-message">{log.message}</span>
-                        </div>
-                    ))
-                )}
-                <div ref={logsEndRef} />
+                            ✕
+                        </button>
+                    </div>
+
+                    <div className="log-controls">
+                        <input
+                            type="text"
+                            placeholder="Filter logs..."
+                            value={filter}
+                            onChange={(e) => setFilter(e.target.value)}
+                            className="log-filter"
+                        />
+
+                        <select
+                            value={levelFilter}
+                            onChange={(e) => setLevelFilter(e.target.value)}
+                            className="log-level-filter"
+                        >
+                            <option value="ALL">All Levels</option>
+                            <option value="DEBUG">Debug</option>
+                            <option value="INFO">Info</option>
+                            <option value="WARN">Warning</option>
+                            <option value="ERROR">Error</option>
+                        </select>
+
+                        <label className="log-autoscroll">
+                            <input
+                                type="checkbox"
+                                checked={autoScroll}
+                                onChange={(e) => setAutoScroll(e.target.checked)}
+                            />
+                            Auto-scroll
+                        </label>
+
+                        <button onClick={handleFetchBackendLogs} className="log-action-btn">
+                            Fetch Backend
+                        </button>
+
+                        <button onClick={handleExportLogs} className="log-export-btn">
+                            Export
+                        </button>
+
+                        <button onClick={handleClear} className="log-clear-btn">
+                            Clear
+                        </button>
+                    </div>
+
+                    <div className="log-entries">
+                        {filteredLogs.length === 0 ? (
+                            <div className="log-empty">
+                                {logs.length === 0
+                                    ? "No logs yet"
+                                    : "No logs match the current filters"}
+                            </div>
+                        ) : (
+                            filteredLogs.map((log, index) => (
+                                <div
+                                    key={index}
+                                    className={`log-entry log-${log.level.toLowerCase()}`}
+                                    style={{ borderLeftColor: getLevelColor(log.level) }}
+                                >
+                                    <span className="log-timestamp">{log.timestamp}</span>
+                                    <span
+                                        className="log-level"
+                                        style={{ color: getLevelColor(log.level) }}
+                                    >
+                                        {log.level}
+                                    </span>
+                                    {log.module && <span className="log-module">{log.module}</span>}
+                                    <span className="log-message">{log.message}</span>
+                                </div>
+                            ))
+                        )}
+                        <div ref={logsEndRef} />
+                    </div>
+
+                    <div className="log-footer">
+                        {filteredLogs.length}/{logs.length} entries
+                    </div>
+                </div>
             </div>
 
-            <div className="log-footer">
-                {filteredLogs.length}/{logs.length} entries
-            </div>
-        </div>
+            {/* Tab button at bottom */}
+            <button
+                className="log-tab"
+                onClick={handleToggle}
+                title={isDrawerOpen ? "Close logs" : "Open logs"}
+            >
+                <span className="log-tab-icon">📋</span>
+                <span className="log-tab-text">Logs</span>
+                <span className="log-tab-badge">{logs.length}</span>
+            </button>
+        </>
     );
 };

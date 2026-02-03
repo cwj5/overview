@@ -163,19 +163,6 @@ function App() {
           >
             Open Multiple Files
           </button>
-          <button
-            onClick={() => setShowLogs(!showLogs)}
-            style={{
-              padding: '8px 16px',
-              cursor: 'pointer',
-              background: showLogs ? '#10b981' : '#6b7280',
-              border: 'none',
-              borderRadius: '4px',
-              color: 'white'
-            }}
-          >
-            {showLogs ? 'Hide Logs' : 'Show Logs'}
-          </button>
         </div>
         {error && <span style={{ color: '#ef4444', fontSize: '14px' }}>{error}</span>}
         {fileMetadata && (
@@ -203,7 +190,7 @@ function App() {
         <div style={{ flex: 1, position: 'relative' }}>
           <Viewer3D gridData={gridData} />
         </div>
-        {showLogs && <LogViewer isOpen={showLogs} onClose={() => setShowLogs(false)} />}
+        <LogViewer isOpen={showLogs} onToggle={setShowLogs} />
       </main>
     </div>
   );
