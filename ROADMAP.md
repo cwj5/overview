@@ -32,7 +32,20 @@ This document outlines the future development work needed to create a full-featu
 - [x] Handle byte order (big-endian vs little-endian)
 - [x] Add file format validation and error handling
 
-### 1.3 Mesh Rendering
+### 1.3 Logging System
+- [ ] Implement structured logging (frontend & backend)
+  - [ ] Rust: Use `tracing` and `tracing-subscriber` for backend logging
+  - [ ] TypeScript: Use `pino` or `winston` for frontend logging
+- [ ] Add log levels (DEBUG, INFO, WARN, ERROR)
+- [ ] File operations logging (load, parse, errors)
+- [ ] User-visible log viewer panel in UI
+- [ ] Log persistence to disk
+- [ ] Log filtering and search
+- [ ] Integration with all Tauri commands
+- [ ] Error reporting to user with helpful messages
+- [ ] Performance event logging
+
+### 1.4 Mesh Rendering
 - [ ] Convert PLOT3D grid data to Three.js geometry
 - [ ] Render structured grid as wireframe
 - [ ] Implement surface extraction from 3D grids
@@ -42,7 +55,7 @@ This document outlines the future development work needed to create a full-featu
   - [ ] Frustum culling
   - [ ] Instancing for repeated geometry
 
-### 1.4 Multi-Grid Support
+### 1.5 Multi-Grid Support
 - [ ] Render multiple grids simultaneously
 - [ ] Color-code different grids
 - [ ] Toggle visibility per grid
@@ -204,7 +217,7 @@ Research and implement PLOT3D's 74 built-in functions:
 ### Code Quality
 - [ ] Add comprehensive error handling
 - [ ] Implement proper TypeScript types (remove `any`)
-- [ ] Add logging system
+- [x] Add logging system (see Phase 1.3)
 - [ ] Performance profiling and monitoring
 - [ ] Security audit for file handling
 
