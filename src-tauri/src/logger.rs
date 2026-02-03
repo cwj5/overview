@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
-use tracing::{debug, error, info, warn};
-use tracing_subscriber::filter::EnvFilter;
 
 /// Log entry with timestamp, level, and message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,15 +23,8 @@ pub fn init_logger() {
         *logs = Some(Vec::new());
     }
 
-    // Set up tracing subscriber with environment filter
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(env_filter)
-        .init();
-
-    info!("Logging system initialized");
+    // Log to internal storage only (no terminal output)
+    log_entry("INFO", "Logging system initialized", None);
 }
 
 /// Get all log entries
@@ -77,25 +68,21 @@ pub fn log_entry(level: &str, message: &str, module: Option<String>) {
 
 /// Log info message
 pub fn log_info(message: &str) {
-    info!("{}", message);
     log_entry("INFO", message, None);
 }
 
 /// Log warning message
 pub fn log_warn(message: &str) {
-    warn!("{}", message);
     log_entry("WARN", message, None);
 }
 
 /// Log error message
 pub fn log_error(message: &str) {
-    error!("{}", message);
     log_entry("ERROR", message, None);
 }
 
 /// Log debug message
 pub fn log_debug(message: &str) {
-    debug!("{}", message);
     log_entry("DEBUG", message, None);
 }
 
@@ -125,7 +112,6 @@ pub fn export_logs(path: &str) -> std::io::Result<()> {
         )?;
     }
 
-    info!("Logs exported to {}", path);
     Ok(())
 }
 
