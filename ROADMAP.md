@@ -13,11 +13,11 @@ This document outlines the future development work needed to create a full-featu
 
 ## Phase 1: Core File I/O and Visualization
 
-### 1.1 File Dialog Integration
-- [ ] Add Tauri dialog plugin to `Cargo.toml`
-- [ ] Implement file picker UI for selecting PLOT3D files
-- [ ] Add support for multiple file selection (multi-grid)
-- [ ] Display file metadata (dimensions, number of grids)
+### 1.1 File Dialog Integration ✅
+- [x] Add Tauri dialog plugin to `Cargo.toml`
+- [x] Implement file picker UI for selecting PLOT3D files
+- [x] Add support for multiple file selection (multi-grid)
+- [x] Display file metadata (dimensions, number of grids)
 
 ### 1.2 PLOT3D Format Support
 - [ ] Complete binary PLOT3D grid file reader
