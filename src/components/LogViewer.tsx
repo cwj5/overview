@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { logger, LogEntry } from "../utils/logger";
 import "./LogViewer.css";
 
@@ -48,16 +49,38 @@ export const LogViewer: React.FC<LogViewerProps> = ({
         logger.info(`Fetched ${backendLogs.length} logs from backend`);
     };
 
-    const filteredLogs = logs.filter((log) => {
-        const matchesText = log.message
-            .toLowerCase()
-            .includes(filter.toLowerCase());
-        const matchesLevel = levelFilter === "ALL" || log.level === levelFilter;
-        return matchesText && matchesLevel;
-    });
+  const handleExportLogs = async () => {
+    try {
+      // Generate filename with timestamp
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, "-").split("T")[0];
+      const filename = `mehu-logs-${timestamp}.txt`;
 
-    if (!isOpen) {
-        return null;
+      // Use the Downloads directory or current directory
+      const downloadsPath = await getDownloadsPath();
+      const filePath = `${downloadsPath}/${filename}`;
+
+      logger.info(`Exporting logs to ${filePath}...`, "LogViewer");
+      await invoke("export_logs_to_file", { path: filePath });
+      logger.info(`Logs successfully exported to ${filename}`, "LogViewer");
+      alert(`Logs exported to:\n${filePath}`);
+    } catch (error) {
+      const errorMsg = `Failed to export logs: ${error}`;
+      logger.error(errorMsg, "LogViewer");
+      alert(errorMsg);
+    }
+  };
+
+  const getDownloadsPath = async (): Promise<string> => {
+    // Try to use tauri's path resolver if available, otherwise use a default
+    try {
+      const path = await invoke<string>("get_downloads_path");
+      return path;
+    } catch {
+      // Fallback to home directory or temp
+      return process.env.HOME || "/tmp";
+    }
+  };
     }
 
     const getLevelColor = (level: string) => {
@@ -120,6 +143,10 @@ export const LogViewer: React.FC<LogViewerProps> = ({
 
                 <button onClick={handleFetchBackendLogs} className="log-action-btn">
                     Fetch Backend
+                </button>
+
+                <button onClick={handleExportLogs} className="log-export-btn">
+                    Export
                 </button>
 
                 <button onClick={handleClear} className="log-clear-btn">

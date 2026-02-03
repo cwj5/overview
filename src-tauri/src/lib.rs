@@ -1,7 +1,7 @@
 mod logger;
 mod plot3d;
 
-use logger::{clear_logs, get_logs, log_debug, log_error, log_info, LogEntry};
+use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, LogEntry};
 use plot3d::{
     read_plot3d_function, read_plot3d_grid, read_plot3d_grid_ascii, read_plot3d_solution,
     read_plot3d_solution_ascii, Plot3DFunction, Plot3DGrid, Plot3DSolution,
@@ -196,6 +196,18 @@ fn clear_log_entries() -> Result<(), String> {
     Ok(())
 }
 
+/// Export logs to a file
+#[tauri::command]
+fn export_logs_to_file(path: String) -> Result<(), String> {
+    export_logs(&path).map_err(|e| {
+        let error_msg = format!("Failed to export logs: {}", e);
+        log_error(&error_msg);
+        error_msg
+    })?;
+    log_info(&format!("Logs exported to {}", path));
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
@@ -217,6 +229,7 @@ pub fn run() {
             detect_file_format,
             get_log_entries,
             clear_log_entries,
+            export_logs_to_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

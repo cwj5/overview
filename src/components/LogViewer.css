@@ -98,24 +98,30 @@
 }
 
 .log-action-btn,
-.log-clear-btn {
-    padding: 4px 12px;
-    background: #1e1e1e;
-    color: #e0e0e0;
-    border: 1px solid #444;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 11px;
-    font-family: inherit;
-    transition: all 0.2s;
-    white-space: nowrap;
+.log-clear-btn,
+.log-export-btn {
+  padding: 4px 12px;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .log-action-btn:hover,
+.log-export-btn:hover,
 .log-clear-btn:hover {
-    background: #2a2a2a;
-    border-color: #555;
+  background: #2a2a2a;
+  border-color: #555;
 }
+
+.log-export-btn:hover {
+  border-color: #4a90e2;
+  color: #4a90e2;
 
 .log-clear-btn:hover {
     border-color: #d32f2f;
