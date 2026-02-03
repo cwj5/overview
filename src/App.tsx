@@ -27,23 +27,23 @@ function App() {
     try {
       setLoading(true);
       setError("");
-      logger.info("Opening file dialog...", "App");
+      logger.info("Opening file dialog...");
 
       // Open file dialog
       const filePath = await invoke<string | null>("open_file_dialog");
 
       if (!filePath) {
         setLoading(false);
-        logger.debug("File dialog cancelled", "App");
+        logger.debug("File dialog cancelled");
         return; // User cancelled
       }
 
-      logger.info(`Loading file: ${filePath}`, "App");
+      logger.info(`Loading file: ${filePath}`);
 
       // Load the PLOT3D file
       const data = await invoke("load_plot3d_file", { path: filePath });
       setGridData(data);
-      logger.info(`Successfully loaded grid data`, "App");
+      logger.info(`Successfully loaded grid data`);
 
       // Extract metadata
       const fileName = filePath.split(/[/\\]/).pop() || filePath;
@@ -62,11 +62,11 @@ function App() {
       }
 
       setFileMetadata(metadata);
-      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`, "App");
+      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`);
     } catch (e) {
       const errorMsg = String(e);
       setError(errorMsg);
-      logger.error(errorMsg, "App");
+      logger.error(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -76,24 +76,24 @@ function App() {
     try {
       setLoading(true);
       setError("");
-      logger.info("Opening multiple files dialog...", "App");
+      logger.info("Opening multiple files dialog...");
 
       // Open file dialog for multiple files
       const filePaths = await invoke<string[]>("open_multiple_files_dialog");
 
       if (!filePaths || filePaths.length === 0) {
         setLoading(false);
-        logger.debug("Multiple files dialog cancelled", "App");
+        logger.debug("Multiple files dialog cancelled");
         return; // User cancelled or no files selected
       }
 
-      logger.info(`Loading ${filePaths.length} file(s)...`, "App");
+      logger.info(`Loading ${filePaths.length} file(s)...`);
 
       // For now, just load the first file
       // TODO: Handle multiple files properly
       const data = await invoke("load_plot3d_file", { path: filePaths[0] });
       setGridData(data);
-      logger.info(`Successfully loaded first file`, "App");
+      logger.info(`Successfully loaded first file`);
 
       const fileName = filePaths[0].split(/[/\\]/).pop() || filePaths[0];
       const metadata: FileMetadata = {
@@ -110,11 +110,11 @@ function App() {
       }
 
       setFileMetadata(metadata);
-      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`, "App");
+      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`);
     } catch (e) {
       const errorMsg = String(e);
       setError(errorMsg);
-      logger.error(errorMsg, "App");
+      logger.error(errorMsg);
     } finally {
       setLoading(false);
     }

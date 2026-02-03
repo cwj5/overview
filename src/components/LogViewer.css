@@ -266,17 +266,17 @@
 .log-level {
     flex-shrink: 0;
     font-weight: 600;
-    min-width: 50px;
+    min-width: 20px;
     text-align: center;
-    font-size: 10px;
+    font-size: 14px;
 }
 
 .log-source {
     flex-shrink: 0;
     font-weight: 500;
-    min-width: 55px;
+    min-width: 20px;
     text-align: center;
-    font-size: 10px;
+    font-size: 14px;
 }
 
 .log-module {

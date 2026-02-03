@@ -62,7 +62,7 @@ class Logger {
             level,
             message,
             module,
-            source: "frontend",
+            source: "⚛️",
         };
 
         this.logs.push(entry);

@@ -61,7 +61,7 @@ pub fn log_entry(level: &str, message: &str, module: Option<String>) {
         level: level.to_string(),
         message: message.to_string(),
         module,
-        source: "backend".to_string(),
+        source: "🦀".to_string(),
     };
 
     if let Ok(mut logs) = LOGS.lock() {
