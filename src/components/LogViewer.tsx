@@ -234,16 +234,18 @@ export const LogViewer: React.FC<LogViewerProps> = ({
                 </div>
             </div>
 
-            {/* Tab button at bottom */}
-            <button
-                className="log-tab"
-                onClick={handleToggle}
-                title={isDrawerOpen ? "Close logs" : "Open logs"}
-            >
-                <span className="log-tab-icon">📋</span>
-                <span className="log-tab-text">Logs</span>
-                <span className="log-tab-badge">{logs.length}</span>
-            </button>
+            {/* Tab button at bottom - only show when drawer is closed */}
+            {!isDrawerOpen && (
+                <button
+                    className="log-tab"
+                    onClick={handleToggle}
+                    title="Open logs"
+                >
+                    <span className="log-tab-icon">📋</span>
+                    <span className="log-tab-text">Logs</span>
+                    <span className="log-tab-badge">{logs.length}</span>
+                </button>
+            )}
         </>
     );
 };
