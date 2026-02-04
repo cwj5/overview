@@ -72,6 +72,7 @@ pub fn log_info(message: &str) {
 }
 
 /// Log warning message
+#[allow(dead_code)]
 pub fn log_warn(message: &str) {
     log_entry("WARN", message, None);
 }

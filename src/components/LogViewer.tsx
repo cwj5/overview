@@ -251,7 +251,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
                                     >
                                         {log.level === "DEBUG" ? "🐛" : log.level === "INFO" ? "ℹ️" : log.level === "WARN" ? "⚠️" : "❌"}
                                     </span>
-                                    <span className="log-source" style={{ color: log.source === "🦀" ? "#9c27b0" : "#4a90e2" }}>
+                                    <span className="log-source" style={{ color: log.source === "🦀" || log.source === "backend" ? "#9c27b0" : "#4a90e2" }}>
                                         {log.source}
                                     </span>
                                     {log.module && <span className="log-module">{log.module}</span>}

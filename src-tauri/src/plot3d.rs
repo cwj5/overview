@@ -246,6 +246,7 @@ impl Plot3DGrid {
 
 impl Plot3DSolution {
     /// Calculate total number of points
+    #[allow(dead_code)]
     pub fn total_points(&self) -> usize {
         (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
     }
@@ -253,12 +254,14 @@ impl Plot3DSolution {
 
 impl Plot3DFunction {
     /// Calculate total number of points
+    #[allow(dead_code)]
     pub fn total_points(&self) -> usize {
         (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
     }
 }
 
 /// Auto-detect byte order by reading first dimension value
+#[allow(dead_code)]
 fn detect_byte_order<R: Read>(reader: &mut R) -> io::Result<ByteOrder> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf)?;
@@ -283,6 +286,7 @@ fn detect_byte_order<R: Read>(reader: &mut R) -> io::Result<ByteOrder> {
 /// - Record 1: number of grids (int32) - surrounded by record markers
 /// - Record 2: For each grid: I, J, K dimensions (3 x int32 x num_grids) - surrounded by record markers  
 /// - Records 3+: Grid coordinates: X, Y, Z arrays (float32) - each array in its own record with markers
+#[allow(dead_code)]
 pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> {
     let path_ref = path.as_ref();
     let file = File::open(path_ref)?;
@@ -631,22 +635,50 @@ pub fn read_plot3d_grid_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DG
 
 /// Read PLOT3D solution file (Q file) in binary format
 pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSolution>> {
-    let file = File::open(path)?;
+    let path_ref = path.as_ref();
+    let file = File::open(path_ref)?;
     let mut reader = BufReader::new(file);
 
-    // Detect byte order
-    let byte_order = detect_byte_order(&mut reader)?;
+    // Try little-endian first
+    skip_record_marker(&mut reader)?;
+    let num_grids_le = read_i32(&mut reader, ByteOrder::LittleEndian)?;
+    skip_record_marker(&mut reader)?;
 
-    // Read number of grids
+    let byte_order = if num_grids_le > 0 && num_grids_le < 1000 {
+        ByteOrder::LittleEndian
+    } else {
+        // Try big-endian
+        let file = File::open(path_ref)?;
+        let mut reader = BufReader::new(file);
+        skip_record_marker(&mut reader)?;
+        let num_grids_be = read_i32(&mut reader, ByteOrder::BigEndian)?;
+        skip_record_marker(&mut reader)?;
+
+        if num_grids_be > 0 && num_grids_be < 1000 {
+            ByteOrder::BigEndian
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Invalid number of grids: {} (LE) or {} (BE)",
+                    num_grids_le, num_grids_be
+                ),
+            ));
+        }
+    };
+
+    // Re-read from start with correct byte order
+    let file = File::open(path_ref)?;
+    let mut reader = BufReader::new(file);
+
+    skip_record_marker(&mut reader)?;
     let num_grids = read_i32(&mut reader, byte_order)?;
-    if num_grids <= 0 || num_grids > 1000 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Invalid number of grids: {}", num_grids),
-        ));
-    }
+    skip_record_marker(&mut reader)?;
 
     let mut solutions = Vec::with_capacity(num_grids as usize);
+
+    // Skip opening record marker for dimensions
+    skip_record_marker(&mut reader)?;
 
     // Read dimensions for all grids
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
@@ -665,15 +697,33 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
         dimensions_list.push(GridDimensions { i, j, k });
     }
 
+    // Skip closing record marker for dimensions
+    skip_record_marker(&mut reader)?;
+
     // Read solution data for each grid (5 variables: rho, rhou, rhov, rhow, rhoe)
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
+        // Read each variable array with its record markers
+        skip_record_marker(&mut reader)?;
         let rho = read_f32_array(&mut reader, total_points, byte_order)?;
+        skip_record_marker(&mut reader)?;
+
+        skip_record_marker(&mut reader)?;
         let rhou = read_f32_array(&mut reader, total_points, byte_order)?;
+        skip_record_marker(&mut reader)?;
+
+        skip_record_marker(&mut reader)?;
         let rhov = read_f32_array(&mut reader, total_points, byte_order)?;
+        skip_record_marker(&mut reader)?;
+
+        skip_record_marker(&mut reader)?;
         let rhow = read_f32_array(&mut reader, total_points, byte_order)?;
+        skip_record_marker(&mut reader)?;
+
+        skip_record_marker(&mut reader)?;
         let rhoe = read_f32_array(&mut reader, total_points, byte_order)?;
+        skip_record_marker(&mut reader)?;
 
         solutions.push(Plot3DSolution {
             grid_index,
@@ -815,22 +865,50 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
 
 /// Read PLOT3D function file (F file) in binary format
 pub fn read_plot3d_function<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DFunction>> {
-    let file = File::open(path)?;
+    let path_ref = path.as_ref();
+    let file = File::open(path_ref)?;
     let mut reader = BufReader::new(file);
 
-    // Detect byte order
-    let byte_order = detect_byte_order(&mut reader)?;
+    // Try little-endian first
+    skip_record_marker(&mut reader)?;
+    let num_grids_le = read_i32(&mut reader, ByteOrder::LittleEndian)?;
+    skip_record_marker(&mut reader)?;
 
-    // Read number of grids
+    let byte_order = if num_grids_le > 0 && num_grids_le < 1000 {
+        ByteOrder::LittleEndian
+    } else {
+        // Try big-endian
+        let file = File::open(path_ref)?;
+        let mut reader = BufReader::new(file);
+        skip_record_marker(&mut reader)?;
+        let num_grids_be = read_i32(&mut reader, ByteOrder::BigEndian)?;
+        skip_record_marker(&mut reader)?;
+
+        if num_grids_be > 0 && num_grids_be < 1000 {
+            ByteOrder::BigEndian
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Invalid number of grids: {} (LE) or {} (BE)",
+                    num_grids_le, num_grids_be
+                ),
+            ));
+        }
+    };
+
+    // Re-read from start with correct byte order
+    let file = File::open(path_ref)?;
+    let mut reader = BufReader::new(file);
+
+    skip_record_marker(&mut reader)?;
     let num_grids = read_i32(&mut reader, byte_order)?;
-    if num_grids <= 0 || num_grids > 1000 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Invalid number of grids: {}", num_grids),
-        ));
-    }
+    skip_record_marker(&mut reader)?;
 
     let mut functions = Vec::with_capacity(num_grids as usize);
+
+    // Skip opening record marker for dimensions
+    skip_record_marker(&mut reader)?;
 
     // Read dimensions for all grids
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
@@ -849,16 +927,24 @@ pub fn read_plot3d_function<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DFun
         dimensions_list.push(GridDimensions { i, j, k });
     }
 
+    // Skip closing record marker for dimensions
+    skip_record_marker(&mut reader)?;
+
     // Read function data for each grid
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        // Read number of functions
+        // Skip opening record marker and read number of functions
+        skip_record_marker(&mut reader)?;
         let num_functions = read_i32(&mut reader, byte_order)? as usize;
+        skip_record_marker(&mut reader)?;
+
         let mut function_data = Vec::with_capacity(num_functions);
 
         for _ in 0..num_functions {
+            skip_record_marker(&mut reader)?;
             let func_array = read_f32_array(&mut reader, total_points, byte_order)?;
+            skip_record_marker(&mut reader)?;
             function_data.push(func_array);
         }
 
@@ -1467,5 +1553,203 @@ mod tests {
             assert_eq!(mesh.vertices[i * 3 + 1], coords[i]);
             assert_eq!(mesh.vertices[i * 3 + 2], coords[i]);
         }
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_with_metadata_binary() -> io::Result<()> {
+        // Create a simple binary PLOT3D grid file with Fortran record markers
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: Number of grids (1 grid) with Fortran markers
+        temp_file.write_all(&4i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&1i32.to_le_bytes())?; // num_grids = 1
+        temp_file.write_all(&4i32.to_le_bytes())?; // Closing marker
+
+        // Record 2: Dimensions (2x2x2) with Fortran markers
+        temp_file.write_all(&12i32.to_le_bytes())?; // Opening marker (3 * 4 bytes)
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&2i32.to_le_bytes())?; // j = 2
+        temp_file.write_all(&2i32.to_le_bytes())?; // k = 2
+        temp_file.write_all(&12i32.to_le_bytes())?; // Closing marker
+
+        // Record 3: X coordinates (8 values) with markers
+        temp_file.write_all(&32i32.to_le_bytes())?; // Opening marker (8 * 4 bytes)
+        for i in 0..8 {
+            temp_file.write_all(&(i as f32).to_le_bytes())?;
+        }
+        temp_file.write_all(&32i32.to_le_bytes())?; // Closing marker
+
+        // Record 4: Y coordinates (8 values) with markers
+        temp_file.write_all(&32i32.to_le_bytes())?;
+        for i in 0..8 {
+            temp_file.write_all(&(i as f32 + 0.5).to_le_bytes())?;
+        }
+        temp_file.write_all(&32i32.to_le_bytes())?;
+
+        // Record 5: Z coordinates (8 values) with markers
+        temp_file.write_all(&32i32.to_le_bytes())?;
+        for i in 0..8 {
+            temp_file.write_all(&(i as f32 + 1.0).to_le_bytes())?;
+        }
+        temp_file.write_all(&32i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_grid_with_metadata(temp_file.path());
+        assert!(result.is_ok());
+
+        let (grids, metadata) = result.unwrap();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(metadata.num_grids, 1);
+        assert_eq!(metadata.byte_order, "Little-Endian");
+        assert_eq!(grids[0].dimensions.i, 2);
+        assert_eq!(grids[0].dimensions.j, 2);
+        assert_eq!(grids[0].dimensions.k, 2);
+        assert_eq!(grids[0].total_points(), 8);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_binary() -> io::Result<()> {
+        // Create a binary PLOT3D solution file with complete Fortran record markers
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?; // Opening marker (4 bytes of data)
+        temp_file.write_all(&1i32.to_le_bytes())?; // num_grids = 1
+        temp_file.write_all(&4i32.to_le_bytes())?; // Closing marker
+
+        // Record 2: dimensions (3 integers = 12 bytes)
+        temp_file.write_all(&12i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // j = 1
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&12i32.to_le_bytes())?; // Closing marker
+
+        // Solution data for 2 points (i=2, j=1, k=1), 5 variables
+        let rho_data = vec![1.0f32, 2.0f32];
+        let rhou_data = vec![3.0f32, 4.0f32];
+        let rhov_data = vec![5.0f32, 6.0f32];
+        let rhow_data = vec![7.0f32, 8.0f32];
+        let rhoe_data = vec![9.0f32, 10.0f32];
+
+        // Record 3: rho array (2 floats = 8 bytes)
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &rho_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        // Record 4: rhou array
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &rhou_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        // Record 5: rhov array
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &rhov_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        // Record 6: rhow array
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &rhow_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        // Record 7: rhoe array
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &rhoe_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read binary solution: {:?}",
+            result.err()
+        );
+
+        let solutions = result.unwrap();
+        assert_eq!(solutions.len(), 1);
+        assert_eq!(solutions[0].total_points(), 2);
+        assert_eq!(solutions[0].rho, rho_data);
+        assert_eq!(solutions[0].rhou, rhou_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_function_binary() -> io::Result<()> {
+        // Create a binary PLOT3D function file with complete Fortran record markers
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&1i32.to_le_bytes())?; // num_grids = 1
+        temp_file.write_all(&4i32.to_le_bytes())?; // Closing marker
+
+        // Record 2: dimensions (3 integers = 12 bytes)
+        temp_file.write_all(&12i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // j = 1
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&12i32.to_le_bytes())?; // Closing marker
+
+        // Record 3: num_functions
+        temp_file.write_all(&4i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&2i32.to_le_bytes())?; // num_functions = 2
+        temp_file.write_all(&4i32.to_le_bytes())?; // Closing marker
+
+        // Function data for 2 points (i=2, j=1, k=1), 2 functions
+        let func1_data = vec![1.0f32, 2.0f32];
+        let func2_data = vec![3.0f32, 4.0f32];
+
+        // Record 4: First function array (2 floats = 8 bytes)
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &func1_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        // Record 5: Second function array (2 floats = 8 bytes)
+        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &func2_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&8i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_function(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read binary function: {:?}",
+            result.err()
+        );
+
+        let functions = result.unwrap();
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].total_points(), 2);
+        assert_eq!(functions[0].function_data.len(), 2);
+        assert_eq!(functions[0].function_data[0], func1_data);
+        assert_eq!(functions[0].function_data[1], func2_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_precision_as_str() {
+        assert_eq!(Precision::F32.as_str(), "f32");
+        assert_eq!(Precision::F64.as_str(), "f64");
+        assert_eq!(Precision::Mixed.as_str(), "mixed");
     }
 }

@@ -7,7 +7,7 @@ export interface LogEntry {
     level: LogLevel;
     message: string;
     module?: string;
-    source: "frontend" | "backend";
+    source: "frontend" | "backend" | "⚛️" | "🦀";
 }
 
 /**

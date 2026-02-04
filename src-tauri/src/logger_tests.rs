@@ -55,7 +55,8 @@ mod tests {
     fn test_get_logs_returns_vec() {
         let logs = get_logs();
         // Just verify it returns a Vec (might contain logs from other tests)
-        assert!(logs.len() >= 0); // Always true, but verifies type
+        // Vec::len() always returns a valid usize, so no assertion needed
+        let _len: usize = logs.len();
     }
 
     #[test]
