@@ -121,7 +121,7 @@ function App() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <header style={{
         background: '#1e293b',
         color: 'white',
@@ -129,7 +129,8 @@ function App() {
         display: 'flex',
         alignItems: 'center',
         gap: '20px',
-        flexWrap: 'wrap'
+        flexWrap: 'wrap',
+        flexShrink: 0
       }}>
         <h1 style={{ margin: 0, fontSize: '20px' }}>Mehu - PLOT3D Viewer</h1>
         <div style={{ display: 'flex', gap: '10px' }}>
@@ -175,8 +176,8 @@ function App() {
         )}
       </header>
 
-      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, position: 'relative' }}>
+      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
           <Viewer3D gridData={gridData} />
         </div>
         <LogViewer isOpen={showLogs} onToggle={setShowLogs} />
