@@ -12,6 +12,8 @@ pub struct Plot3DGrid {
     pub x_coords: Vec<f32>,
     pub y_coords: Vec<f32>,
     pub z_coords: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iblank: Option<Vec<i32>>, // Blanking array (0=blanked, 1=visible)
 }
 
 /// File metadata about the loaded grid
@@ -344,11 +346,15 @@ pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> 
         let (x_coords, y_coords, z_coords) =
             read_xyz_coords_with_markers(&mut reader, total_points, byte_order)?;
 
+        // Try to read iblank array if present
+        let iblank = try_read_iblank_array(&mut reader, total_points, byte_order)?;
+
         grids.push(Plot3DGrid {
             dimensions: dims,
             x_coords,
             y_coords,
             z_coords,
+            iblank,
         });
     }
 
@@ -442,11 +448,15 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
         let (x_coords, y_coords, z_coords) =
             read_xyz_coords_with_markers(&mut reader, total_points, byte_order)?;
 
+        // Try to read iblank array if present
+        let iblank = try_read_iblank_array(&mut reader, total_points, byte_order)?;
+
         grids.push(Plot3DGrid {
             dimensions: dims,
             x_coords,
             y_coords,
             z_coords,
+            iblank,
         });
     }
 
@@ -582,6 +592,7 @@ pub fn read_plot3d_grid_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DG
             x_coords,
             y_coords,
             z_coords,
+            iblank: None, // ASCII format typically doesn't include iblank
         });
     }
 
@@ -1139,6 +1150,66 @@ fn read_f32_array_with_markers<R: Read>(
     }
 
     Ok(result)
+}
+
+/// Try to read iblank array if present (returns None if no more data or invalid marker)
+fn try_read_iblank_array<R: Read>(
+    reader: &mut R,
+    count: usize,
+    byte_order: ByteOrder,
+) -> io::Result<Option<Vec<i32>>> {
+    // Try to read opening record marker
+    let mut marker_buf = [0u8; 4];
+    match reader.read_exact(&mut marker_buf) {
+        Ok(_) => {
+            let record_size = match byte_order {
+                ByteOrder::LittleEndian => i32::from_le_bytes(marker_buf),
+                ByteOrder::BigEndian => i32::from_be_bytes(marker_buf),
+            };
+
+            // Check if this looks like a valid iblank record (4 bytes per int)
+            if record_size == (count * 4) as i32 {
+                log_debug(&format!("Reading iblank array: {} values", count));
+
+                let mut iblank = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let mut buf = [0u8; 4];
+                    reader.read_exact(&mut buf)?;
+                    let value = match byte_order {
+                        ByteOrder::LittleEndian => i32::from_le_bytes(buf),
+                        ByteOrder::BigEndian => i32::from_be_bytes(buf),
+                    };
+                    iblank.push(value);
+                }
+
+                // Read and verify closing marker
+                let closing_marker = read_record_marker(reader, byte_order)?;
+                if closing_marker != record_size {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "iblank record marker mismatch: {} != {}",
+                            record_size, closing_marker
+                        ),
+                    ));
+                }
+
+                Ok(Some(iblank))
+            } else {
+                // Not an iblank array, this is probably end of file or next grid
+                // We already consumed the marker, so we can't put it back
+                // This is okay - it means no iblank array for this grid
+                log_debug("No iblank array detected");
+                Ok(None)
+            }
+        }
+        Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            // End of file, no iblank array
+            log_debug("End of file, no iblank array");
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]

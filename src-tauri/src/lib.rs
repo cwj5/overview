@@ -54,6 +54,16 @@ fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
                     grid.z_coords.len()
                 ));
 
+                if let Some(ref iblank) = grid.iblank {
+                    let blanked_count = iblank.iter().filter(|&&v| v == 0).count();
+                    log_info(&format!(
+                        "Grid {} has iblank array: {} blanked points ({:.1}%)",
+                        idx,
+                        blanked_count,
+                        (blanked_count as f32 / expected_points as f32) * 100.0
+                    ));
+                }
+
                 if grid.x_coords.len() > 0 {
                     log_debug(&format!(
                         "Grid {} sample: x[0]={}, y[0]={}, z[0]={}",
