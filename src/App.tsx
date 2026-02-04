@@ -78,19 +78,6 @@ function App() {
       const data = await invoke<Plot3DGrid[]>("load_plot3d_file", { path: filePath });
       const fileName = filePath.split(/[/\\]/).pop() || filePath;
 
-      // Debug: Check if grids have valid data
-      data.forEach((grid, idx) => {
-        const hasCoords = grid.x_coords && grid.y_coords && grid.z_coords;
-        const coordLengths = hasCoords
-          ? `x:${grid.x_coords.length}, y:${grid.y_coords.length}, z:${grid.z_coords.length}`
-          : 'missing coords';
-        logger.debug(`Grid ${idx}: dims=${grid.dimensions.i}x${grid.dimensions.j}x${grid.dimensions.k}, ${coordLengths}`);
-
-        if (hasCoords && grid.x_coords.length > 0) {
-          logger.debug(`Grid ${idx} sample coords: x[0]=${grid.x_coords[0]}, y[0]=${grid.y_coords[0]}, z[0]=${grid.z_coords[0]}`);
-        }
-      });
-
       const gridItems = buildGridItems(data, filePath, fileName, 0);
       setGrids(gridItems);
       setSelectedGridId(gridItems[0]?.id ?? null);
@@ -137,15 +124,6 @@ function App() {
       for (const path of filePaths) {
         const data = await invoke<Plot3DGrid[]>("load_plot3d_file", { path });
         const fileName = path.split(/[/\\]/).pop() || path;
-
-        // Debug: Check if grids have valid data
-        data.forEach((grid, idx) => {
-          const hasCoords = grid.x_coords && grid.y_coords && grid.z_coords;
-          const coordLengths = hasCoords
-            ? `x:${grid.x_coords.length}, y:${grid.y_coords.length}, z:${grid.z_coords.length}`
-            : 'missing coords';
-          logger.debug(`Grid ${idx} from ${fileName}: dims=${grid.dimensions.i}x${grid.dimensions.j}x${grid.dimensions.k}, ${coordLengths}`);
-        });
 
         const gridItems = buildGridItems(data, path, fileName, colorOffset);
         allGrids.push(...gridItems);

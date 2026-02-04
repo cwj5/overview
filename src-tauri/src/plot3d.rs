@@ -3,8 +3,6 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
-use crate::logger::log_debug;
-
 /// Represents a PLOT3D grid structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plot3DGrid {
@@ -21,6 +19,8 @@ pub struct Plot3DGrid {
 pub struct GridFileMetadata {
     pub byte_order: String, // "Little-Endian" or "Big-Endian"
     pub is_detected: bool,  // true if auto-detected, false if assumed
+    pub precision: String,  // "f32", "f64", or "mixed"
+    pub has_iblank: bool,
     pub num_grids: usize,
     pub grid_dimensions: Vec<GridDimensions>,
 }
@@ -68,6 +68,23 @@ pub struct MeshGeometry {
 pub enum ByteOrder {
     LittleEndian,
     BigEndian,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Precision {
+    F32,
+    F64,
+    Mixed,
+}
+
+impl Precision {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Precision::F32 => "f32",
+            Precision::F64 => "f64",
+            Precision::Mixed => "mixed",
+        }
+    }
 }
 
 impl Plot3DGrid {
@@ -343,7 +360,7 @@ pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> 
     for dims in dimensions_list {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        let (x_coords, y_coords, z_coords) =
+        let (x_coords, y_coords, z_coords, _precision) =
             read_xyz_coords_with_markers(&mut reader, total_points, byte_order)?;
 
         // Try to read iblank array if present
@@ -419,6 +436,8 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
 
     let mut grids = Vec::with_capacity(num_grids as usize);
     let mut grid_dimensions = Vec::with_capacity(num_grids as usize);
+    let mut precision: Option<Precision> = None;
+    let mut has_iblank = false;
 
     // Read dimensions for all grids (in one record with markers)
     skip_record_marker(&mut reader)?;
@@ -445,11 +464,20 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
     for dims in dimensions_list {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        let (x_coords, y_coords, z_coords) =
+        let (x_coords, y_coords, z_coords, grid_precision) =
             read_xyz_coords_with_markers(&mut reader, total_points, byte_order)?;
+
+        precision = Some(match precision {
+            None => grid_precision,
+            Some(existing) if existing == grid_precision => existing,
+            Some(_) => Precision::Mixed,
+        });
 
         // Try to read iblank array if present
         let iblank = try_read_iblank_array(&mut reader, total_points, byte_order)?;
+        if iblank.is_some() {
+            has_iblank = true;
+        }
 
         grids.push(Plot3DGrid {
             dimensions: dims,
@@ -463,6 +491,8 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
     let metadata = GridFileMetadata {
         byte_order: byte_order_str.to_string(),
         is_detected: true,
+        precision: precision.unwrap_or(Precision::Mixed).as_str().to_string(),
+        has_iblank,
         num_grids: num_grids as usize,
         grid_dimensions,
     };
@@ -888,8 +918,7 @@ fn read_xyz_coords_with_markers<R: Read>(
     reader: &mut R,
     count: usize,
     byte_order: ByteOrder,
-) -> io::Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
-    // Read opening record marker to determine format
+) -> io::Result<(Vec<f32>, Vec<f32>, Vec<f32>, Precision)> {
     let record_size = read_record_marker(reader, byte_order)?;
 
     if record_size <= 0 {
@@ -899,46 +928,14 @@ fn read_xyz_coords_with_markers<R: Read>(
         ));
     }
 
-    // Check if this record contains all three coordinate arrays (x, y, z)
-    let total_values = record_size as usize / 4; // Try f32 first
-    let total_values_f64 = record_size as usize / 8; // Try f64
+    let total_values_f32 = record_size as usize / 4;
+    let total_values_f64 = record_size as usize / 8;
 
-    if total_values == count * 3 {
-        // Combined record with all xyz in single precision
-        log_debug(&format!(
-            "Reading combined XYZ record (f32): {} points",
-            count
-        ));
-        let mut x_coords = Vec::with_capacity(count);
-        let mut y_coords = Vec::with_capacity(count);
-        let mut z_coords = Vec::with_capacity(count);
+    if total_values_f32 == count * 3 {
+        let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
 
-        for _ in 0..count {
-            let mut buf = [0u8; 4];
-            reader.read_exact(&mut buf)?;
-            x_coords.push(match byte_order {
-                ByteOrder::LittleEndian => f32::from_le_bytes(buf),
-                ByteOrder::BigEndian => f32::from_be_bytes(buf),
-            });
-        }
-        for _ in 0..count {
-            let mut buf = [0u8; 4];
-            reader.read_exact(&mut buf)?;
-            y_coords.push(match byte_order {
-                ByteOrder::LittleEndian => f32::from_le_bytes(buf),
-                ByteOrder::BigEndian => f32::from_be_bytes(buf),
-            });
-        }
-        for _ in 0..count {
-            let mut buf = [0u8; 4];
-            reader.read_exact(&mut buf)?;
-            z_coords.push(match byte_order {
-                ByteOrder::LittleEndian => f32::from_le_bytes(buf),
-                ByteOrder::BigEndian => f32::from_be_bytes(buf),
-            });
-        }
-
-        // Read and verify closing record marker
         let closing_marker = read_record_marker(reader, byte_order)?;
         if closing_marker != record_size {
             return Err(io::Error::new(
@@ -950,49 +947,12 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        Ok((x_coords, y_coords, z_coords))
+        Ok((x_coords, y_coords, z_coords, Precision::F32))
     } else if total_values_f64 == count * 3 {
-        // Combined record with all xyz in double precision
-        log_debug(&format!(
-            "Reading combined XYZ record (f64): {} points",
-            count
-        ));
-        let mut x_coords = Vec::with_capacity(count);
-        let mut y_coords = Vec::with_capacity(count);
-        let mut z_coords = Vec::with_capacity(count);
+        let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
 
-        for _ in 0..count {
-            let mut buf = [0u8; 8];
-            reader.read_exact(&mut buf)?;
-            x_coords.push(
-                (match byte_order {
-                    ByteOrder::LittleEndian => f64::from_le_bytes(buf),
-                    ByteOrder::BigEndian => f64::from_be_bytes(buf),
-                }) as f32,
-            );
-        }
-        for _ in 0..count {
-            let mut buf = [0u8; 8];
-            reader.read_exact(&mut buf)?;
-            y_coords.push(
-                (match byte_order {
-                    ByteOrder::LittleEndian => f64::from_le_bytes(buf),
-                    ByteOrder::BigEndian => f64::from_be_bytes(buf),
-                }) as f32,
-            );
-        }
-        for _ in 0..count {
-            let mut buf = [0u8; 8];
-            reader.read_exact(&mut buf)?;
-            z_coords.push(
-                (match byte_order {
-                    ByteOrder::LittleEndian => f64::from_le_bytes(buf),
-                    ByteOrder::BigEndian => f64::from_be_bytes(buf),
-                }) as f32,
-            );
-        }
-
-        // Read and verify closing record marker
         let closing_marker = read_record_marker(reader, byte_order)?;
         if closing_marker != record_size {
             return Err(io::Error::new(
@@ -1004,54 +964,24 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        Ok((x_coords, y_coords, z_coords))
+        Ok((x_coords, y_coords, z_coords, Precision::F64))
     } else {
-        // Separate records - this record contains only X, need to read Y and Z separately
-        log_debug(&format!(
-            "Reading separate XYZ records: {} points per array",
-            count
-        ));
-
-        // Read X coordinates from current record
-        let bytes_per_value = record_size as usize / count;
-        let x_coords = match bytes_per_value {
-            4 => {
-                log_debug("Reading X as f32");
-                let mut result = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let mut buf = [0u8; 4];
-                    reader.read_exact(&mut buf)?;
-                    result.push(match byte_order {
-                        ByteOrder::LittleEndian => f32::from_le_bytes(buf),
-                        ByteOrder::BigEndian => f32::from_be_bytes(buf),
-                    });
-                }
-                result
-            }
-            8 => {
-                log_debug("Reading X as f64");
-                let mut result = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let mut buf = [0u8; 8];
-                    reader.read_exact(&mut buf)?;
-                    result.push(
-                        (match byte_order {
-                            ByteOrder::LittleEndian => f64::from_le_bytes(buf),
-                            ByteOrder::BigEndian => f64::from_be_bytes(buf),
-                        }) as f32,
-                    );
-                }
-                result
-            }
+        let precision = match record_size as usize {
+            size if size == count * 4 => Precision::F32,
+            size if size == count * 8 => Precision::F64,
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("Unexpected precision: {} bytes per value", bytes_per_value),
+                    format!(
+                        "Unexpected precision: {} bytes per value",
+                        record_size as usize / count
+                    ),
                 ));
             }
         };
 
-        // Verify closing marker for X
+        let x_coords = read_values_with_precision(reader, count, byte_order, precision)?;
+
         let closing_marker = read_record_marker(reader, byte_order)?;
         if closing_marker != record_size {
             return Err(io::Error::new(
@@ -1063,87 +993,89 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        // Read Y and Z arrays using the same function
-        let y_coords = read_f32_array_with_markers(reader, count, byte_order)?;
-        let z_coords = read_f32_array_with_markers(reader, count, byte_order)?;
+        let y_coords = read_f32_array_with_markers_precision(reader, count, byte_order, precision)?;
+        let z_coords = read_f32_array_with_markers_precision(reader, count, byte_order, precision)?;
 
-        Ok((x_coords, y_coords, z_coords))
+        Ok((x_coords, y_coords, z_coords, precision))
     }
 }
 
-/// Read f32 array with Fortran record markers (auto-detects single/double precision)
-fn read_f32_array_with_markers<R: Read>(
+fn read_values_with_precision<R: Read>(
     reader: &mut R,
     count: usize,
     byte_order: ByteOrder,
+    precision: Precision,
 ) -> io::Result<Vec<f32>> {
-    // Read opening record marker to get record size in bytes
-    let record_size = read_record_marker(reader, byte_order)?;
-
-    if record_size <= 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Invalid record marker: {}", record_size),
-        ));
-    }
-
-    let bytes_per_value = record_size as usize / count;
-
-    let result = match bytes_per_value {
-        4 => {
-            // Single precision (f32)
-            log_debug(&format!(
-                "Reading single precision (f32) array: {} values",
-                count
-            ));
-            let mut result = Vec::with_capacity(count);
+    let mut result = Vec::with_capacity(count);
+    match precision {
+        Precision::F32 => {
             for _ in 0..count {
                 let mut buf = [0u8; 4];
                 reader.read_exact(&mut buf)?;
-                let value = match byte_order {
+                result.push(match byte_order {
                     ByteOrder::LittleEndian => f32::from_le_bytes(buf),
                     ByteOrder::BigEndian => f32::from_be_bytes(buf),
-                };
-                result.push(value);
+                });
             }
-            result
         }
-        8 => {
-            // Double precision (f64) - read and convert to f32
-            log_debug(&format!(
-                "Reading double precision (f64) array: {} values, converting to f32",
-                count
-            ));
-            let mut result = Vec::with_capacity(count);
+        Precision::F64 => {
             for _ in 0..count {
                 let mut buf = [0u8; 8];
                 reader.read_exact(&mut buf)?;
-                let value = match byte_order {
-                    ByteOrder::LittleEndian => f64::from_le_bytes(buf),
-                    ByteOrder::BigEndian => f64::from_be_bytes(buf),
-                };
-                result.push(value as f32);
+                result.push(
+                    (match byte_order {
+                        ByteOrder::LittleEndian => f64::from_le_bytes(buf),
+                        ByteOrder::BigEndian => f64::from_be_bytes(buf),
+                    }) as f32,
+                );
             }
-            result
         }
-        _ => {
+        Precision::Mixed => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "Unexpected precision: {} bytes per value (expected 4 or 8). Record size: {}, count: {}",
-                    bytes_per_value, record_size, count
-                ),
+                "Unexpected mixed precision in data block",
+            ));
+        }
+    }
+    Ok(result)
+}
+
+fn read_f32_array_with_markers_precision<R: Read>(
+    reader: &mut R,
+    count: usize,
+    byte_order: ByteOrder,
+    precision: Precision,
+) -> io::Result<Vec<f32>> {
+    let record_size = read_record_marker(reader, byte_order)?;
+    let expected_size = match precision {
+        Precision::F32 => (count * 4) as i32,
+        Precision::F64 => (count * 8) as i32,
+        Precision::Mixed => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unexpected mixed precision in record",
             ));
         }
     };
 
-    // Read and verify closing record marker
+    if record_size != expected_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Record size {} does not match expected {}",
+                record_size, expected_size
+            ),
+        ));
+    }
+
+    let result = read_values_with_precision(reader, count, byte_order, precision)?;
+
     let closing_marker = read_record_marker(reader, byte_order)?;
     if closing_marker != record_size {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "Record marker mismatch: opening {} != closing {}",
+                "Record marker mismatch: {} != {}",
                 record_size, closing_marker
             ),
         ));
@@ -1153,63 +1085,50 @@ fn read_f32_array_with_markers<R: Read>(
 }
 
 /// Try to read iblank array if present (returns None if no more data or invalid marker)
-fn try_read_iblank_array<R: Read>(
+fn try_read_iblank_array<R: BufRead>(
     reader: &mut R,
     count: usize,
     byte_order: ByteOrder,
 ) -> io::Result<Option<Vec<i32>>> {
-    // Try to read opening record marker
-    let mut marker_buf = [0u8; 4];
-    match reader.read_exact(&mut marker_buf) {
-        Ok(_) => {
-            let record_size = match byte_order {
-                ByteOrder::LittleEndian => i32::from_le_bytes(marker_buf),
-                ByteOrder::BigEndian => i32::from_be_bytes(marker_buf),
-            };
-
-            // Check if this looks like a valid iblank record (4 bytes per int)
-            if record_size == (count * 4) as i32 {
-                log_debug(&format!("Reading iblank array: {} values", count));
-
-                let mut iblank = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let mut buf = [0u8; 4];
-                    reader.read_exact(&mut buf)?;
-                    let value = match byte_order {
-                        ByteOrder::LittleEndian => i32::from_le_bytes(buf),
-                        ByteOrder::BigEndian => i32::from_be_bytes(buf),
-                    };
-                    iblank.push(value);
-                }
-
-                // Read and verify closing marker
-                let closing_marker = read_record_marker(reader, byte_order)?;
-                if closing_marker != record_size {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "iblank record marker mismatch: {} != {}",
-                            record_size, closing_marker
-                        ),
-                    ));
-                }
-
-                Ok(Some(iblank))
-            } else {
-                // Not an iblank array, this is probably end of file or next grid
-                // We already consumed the marker, so we can't put it back
-                // This is okay - it means no iblank array for this grid
-                log_debug("No iblank array detected");
-                Ok(None)
-            }
-        }
-        Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-            // End of file, no iblank array
-            log_debug("End of file, no iblank array");
-            Ok(None)
-        }
-        Err(e) => Err(e),
+    let buf = reader.fill_buf()?;
+    if buf.len() < 4 {
+        return Ok(None);
     }
+
+    let record_size = match byte_order {
+        ByteOrder::LittleEndian => i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+        ByteOrder::BigEndian => i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
+    };
+
+    if record_size != (count * 4) as i32 {
+        return Ok(None);
+    }
+
+    reader.consume(4);
+
+    let mut iblank = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut buf = [0u8; 4];
+        reader.read_exact(&mut buf)?;
+        let value = match byte_order {
+            ByteOrder::LittleEndian => i32::from_le_bytes(buf),
+            ByteOrder::BigEndian => i32::from_be_bytes(buf),
+        };
+        iblank.push(value);
+    }
+
+    let closing_marker = read_record_marker(reader, byte_order)?;
+    if closing_marker != record_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "iblank record marker mismatch: {} != {}",
+                record_size, closing_marker
+            ),
+        ));
+    }
+
+    Ok(Some(iblank))
 }
 
 #[cfg(test)]
@@ -1230,6 +1149,7 @@ mod tests {
             x_coords: vec![],
             y_coords: vec![],
             z_coords: vec![],
+            iblank: None,
         };
         assert_eq!(grid.total_points(), 6000);
     }
@@ -1433,6 +1353,7 @@ mod tests {
             x_coords: vec![0.0, 1.0, 0.0, 1.0],
             y_coords: vec![0.0, 0.0, 1.0, 1.0],
             z_coords: vec![0.0, 0.0, 0.0, 0.0],
+            iblank: None,
         };
 
         let mesh = grid.to_mesh_geometry();
@@ -1462,6 +1383,7 @@ mod tests {
             x_coords: Vec::with_capacity(18),
             y_coords: Vec::with_capacity(18),
             z_coords: Vec::with_capacity(18),
+            iblank: None,
         };
 
         // Fill with test data
@@ -1505,6 +1427,7 @@ mod tests {
             x_coords: vec![0.0, 1.0, 0.0, 1.0],
             y_coords: vec![0.0, 0.0, 1.0, 1.0],
             z_coords: vec![0.0, 0.0, 0.0, 0.0],
+            iblank: None,
         };
 
         let mesh = grid.to_mesh_geometry();
@@ -1533,6 +1456,7 @@ mod tests {
             x_coords: coords.clone(),
             y_coords: coords.clone(),
             z_coords: coords.clone(),
+            iblank: None,
         };
 
         let mesh = grid.to_mesh_geometry();

@@ -8,6 +8,29 @@ interface LogViewerProps {
     onToggle?: (open: boolean) => void;
 }
 
+const parseLogTimestamp = (timestamp: string): number => {
+    const parsed = Date.parse(timestamp);
+    if (!Number.isNaN(parsed)) {
+        return parsed;
+    }
+
+    const match = timestamp.match(/^(\d{2})-(\d{2})\s*\|\s*(\d{2}):(\d{2}):(\d{2})$/);
+    if (match) {
+        const [, month, day, hour, minute, second] = match;
+        const year = new Date().getFullYear();
+        return new Date(
+            year,
+            Number(month) - 1,
+            Number(day),
+            Number(hour),
+            Number(minute),
+            Number(second)
+        ).getTime();
+    }
+
+    return 0;
+};
+
 export const LogViewer: React.FC<LogViewerProps> = ({
     isOpen = false,
     onToggle,
@@ -34,7 +57,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             const backendLogs = await logger.fetchBackendLogs();
             // Merge backend logs with frontend logs
             const mergedLogs = [...backendLogs, ...logger.getLogs()].sort((a, b) => {
-                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                return parseLogTimestamp(a.timestamp) - parseLogTimestamp(b.timestamp);
             });
             setLogs(mergedLogs);
         };
@@ -45,7 +68,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
         const interval = setInterval(async () => {
             const backendLogs = await logger.fetchBackendLogs();
             const mergedLogs = [...backendLogs, ...logger.getLogs()].sort((a, b) => {
-                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                return parseLogTimestamp(a.timestamp) - parseLogTimestamp(b.timestamp);
             });
             setLogs(mergedLogs);
         }, 500);
@@ -98,7 +121,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             // Get all logs (both frontend and backend merged)
             const backendLogs = await logger.fetchBackendLogs();
             const allLogs = [...backendLogs, ...logger.getLogs()].sort((a, b) => {
-                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                return parseLogTimestamp(a.timestamp) - parseLogTimestamp(b.timestamp);
             });
 
             // Format logs as text

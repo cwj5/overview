@@ -22,7 +22,6 @@ fn greet(name: &str) -> String {
 /// Load PLOT3D grid file (auto-detects binary format)
 #[tauri::command]
 fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
-    log_debug(&format!("Loading PLOT3D grid file: {}", path));
     match read_plot3d_grid_with_metadata(&path) {
         Ok((grids, metadata)) => {
             let dims_str = metadata
@@ -34,43 +33,13 @@ fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
                 .join(", ");
 
             log_info(&format!(
-                "Detected byte order: {} (auto-detected)",
-                metadata.byte_order
+                "Loaded grid file {} (endianness: {}, precision: {}, iblank: {})",
+                path,
+                metadata.byte_order,
+                metadata.precision,
+                if metadata.has_iblank { "yes" } else { "no" }
             ));
-            log_info(&format!(
-                "Loaded {} grid(s): {}",
-                metadata.num_grids, dims_str
-            ));
-
-            // Debug: Validate grid data
-            for (idx, grid) in grids.iter().enumerate() {
-                let expected_points = grid.total_points();
-                log_debug(&format!(
-                    "Grid {}: expected {} points, got x:{}, y:{}, z:{}",
-                    idx,
-                    expected_points,
-                    grid.x_coords.len(),
-                    grid.y_coords.len(),
-                    grid.z_coords.len()
-                ));
-
-                if let Some(ref iblank) = grid.iblank {
-                    let blanked_count = iblank.iter().filter(|&&v| v == 0).count();
-                    log_info(&format!(
-                        "Grid {} has iblank array: {} blanked points ({:.1}%)",
-                        idx,
-                        blanked_count,
-                        (blanked_count as f32 / expected_points as f32) * 100.0
-                    ));
-                }
-
-                if grid.x_coords.len() > 0 {
-                    log_debug(&format!(
-                        "Grid {} sample: x[0]={}, y[0]={}, z[0]={}",
-                        idx, grid.x_coords[0], grid.y_coords[0], grid.z_coords[0]
-                    ));
-                }
-            }
+            log_info(&format!("Grids: {}", dims_str));
 
             Ok(grids)
         }
@@ -85,14 +54,25 @@ fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
 /// Load PLOT3D grid file in ASCII format
 #[tauri::command]
 fn load_plot3d_file_ascii(path: String) -> Result<Vec<Plot3DGrid>, String> {
-    log_debug(&format!("Loading ASCII PLOT3D grid file: {}", path));
     match read_plot3d_grid_ascii(&path) {
         Ok(grids) => {
+            let dims_str = grids
+                .iter()
+                .enumerate()
+                .map(|(idx, d)| {
+                    format!(
+                        "Grid {} ({}×{}×{})",
+                        idx, d.dimensions.i, d.dimensions.j, d.dimensions.k
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
             log_info(&format!(
-                "Successfully loaded {} ASCII grid(s) from {}",
-                grids.len(),
+                "Loaded ASCII grid file {} (endianness: ASCII, precision: f32, iblank: no)",
                 path
             ));
+            log_info(&format!("Grids: {}", dims_str));
             Ok(grids)
         }
         Err(e) => {

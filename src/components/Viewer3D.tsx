@@ -92,43 +92,13 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
             return next;
         });
 
-        logger.debug(`Converting ${missing.length} grid(s) to mesh geometry`, 'Viewer3D');
-
         Promise.all(
             missing.map(async (gridItem) => {
                 try {
-                    logger.debug(`Converting grid ${gridItem.id} (${gridItem.grid.dimensions.i}x${gridItem.grid.dimensions.j}x${gridItem.grid.dimensions.k})`, 'Viewer3D');
-
                     // Check if coordinate arrays exist before creating clean copy
                     if (!gridItem.grid.x_coords || !gridItem.grid.y_coords || !gridItem.grid.z_coords) {
                         throw new Error(`Missing coordinate arrays: x:${!!gridItem.grid.x_coords}, y:${!!gridItem.grid.y_coords}, z:${!!gridItem.grid.z_coords}`);
                     }
-
-                    logger.debug(`Grid ${gridItem.id} coords check: x.length=${gridItem.grid.x_coords.length}, y.length=${gridItem.grid.y_coords.length}, z.length=${gridItem.grid.z_coords.length}`, 'Viewer3D');
-
-                    // Check for null/undefined/NaN/Infinity values in arrays
-                    const checkArray = (arr: number[], name: string) => {
-                        for (let i = 0; i < Math.min(5, arr.length); i++) {
-                            const val = arr[i];
-                            if (val === null || val === undefined) {
-                                throw new Error(`${name}[${i}] is null/undefined`);
-                            }
-                            if (!Number.isFinite(val)) {
-                                throw new Error(`${name}[${i}] is not finite: ${val}`);
-                            }
-                            logger.debug(`${name}[${i}]=${val}`, 'Viewer3D');
-                        }
-
-                        // Check for any invalid values in the whole array
-                        const invalidIdx = arr.findIndex(v => v === null || v === undefined || !Number.isFinite(v));
-                        if (invalidIdx !== -1) {
-                            throw new Error(`${name}[${invalidIdx}] is invalid: ${arr[invalidIdx]}`);
-                        }
-                    };
-
-                    checkArray(gridItem.grid.x_coords, 'x');
-                    checkArray(gridItem.grid.y_coords, 'y');
-                    checkArray(gridItem.grid.z_coords, 'z');
 
                     // Create a clean copy of the grid data to ensure proper serialization
                     const cleanGrid = {
@@ -141,8 +111,6 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                         y_coords: Array.from(gridItem.grid.y_coords),
                         z_coords: Array.from(gridItem.grid.z_coords),
                     };
-
-                    logger.debug(`Clean grid created, sample: x[0]=${cleanGrid.x_coords[0]}, y[0]=${cleanGrid.y_coords[0]}, z[0]=${cleanGrid.z_coords[0]}`, 'Viewer3D');
 
                     const mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', { grid: cleanGrid });
                     return { id: gridItem.id, mesh };
