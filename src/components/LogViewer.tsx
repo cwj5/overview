@@ -84,7 +84,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
     const handleExportLogs = async () => {
         try {
             logger.info("Opening save dialog for log export...");
-            
+
             // Open save file dialog
             const filePath = await invoke<string | null>("save_log_file_dialog");
 
