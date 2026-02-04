@@ -169,19 +169,8 @@ function App() {
           <div style={{
             marginLeft: 'auto',
             fontSize: '14px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '4px'
           }}>
             <div><strong>File:</strong> {fileMetadata.fileName}</div>
-            {fileMetadata.numberOfGrids !== undefined && (
-              <div><strong>Grids:</strong> {fileMetadata.numberOfGrids}</div>
-            )}
-            {fileMetadata.dimensions && (
-              <div>
-                <strong>Dimensions:</strong> {fileMetadata.dimensions.i} × {fileMetadata.dimensions.j} × {fileMetadata.dimensions.k}
-              </div>
-            )}
           </div>
         )}
       </header>
