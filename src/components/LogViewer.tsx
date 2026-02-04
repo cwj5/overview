@@ -83,34 +83,24 @@ export const LogViewer: React.FC<LogViewerProps> = ({
 
     const handleExportLogs = async () => {
         try {
-            // Generate filename with timestamp
-            const now = new Date();
-            const timestamp = now.toISOString().replace(/[:.]/g, "-").split("T")[0];
-            const filename = `mehu-logs-${timestamp}.txt`;
+            logger.info("Opening save dialog for log export...");
+            
+            // Open save file dialog
+            const filePath = await invoke<string | null>("save_log_file_dialog");
 
-            // Use the Downloads directory or current directory
-            const downloadsPath = await getDownloadsPath();
-            const filePath = `${downloadsPath}/${filename}`;
+            if (!filePath) {
+                logger.debug("Log export cancelled");
+                return; // User cancelled
+            }
 
-            logger.info(`Exporting logs to ${filePath}...`, "LogViewer");
+            logger.info(`Exporting logs to ${filePath}...`);
             await invoke("export_logs_to_file", { path: filePath });
-            logger.info(`Logs successfully exported to ${filename}`, "LogViewer");
+            logger.info(`Logs successfully exported`);
             alert(`Logs exported to:\n${filePath}`);
         } catch (error) {
             const errorMsg = `Failed to export logs: ${error}`;
-            logger.error(errorMsg, "LogViewer");
+            logger.error(errorMsg);
             alert(errorMsg);
-        }
-    };
-
-    const getDownloadsPath = async (): Promise<string> => {
-        // Try to use tauri's path resolver if available, otherwise use a default
-        try {
-            const path = await invoke<string>("get_downloads_path");
-            return path;
-        } catch {
-            // Fallback to home directory or temp
-            return "~/Downloads";
         }
     };
 

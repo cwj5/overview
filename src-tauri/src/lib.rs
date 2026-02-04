@@ -220,6 +220,20 @@ fn export_logs_to_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Open save file dialog for log export
+#[tauri::command]
+async fn save_log_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let file_path = app
+        .dialog()
+        .file()
+        .add_filter("Text Files", &["txt"])
+        .add_filter("All Files", &["*"])
+        .set_file_name("mehu-logs.txt")
+        .blocking_save_file();
+
+    Ok(file_path.map(|f| f.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
@@ -242,6 +256,7 @@ pub fn run() {
             get_log_entries,
             clear_log_entries,
             export_logs_to_file,
+            save_log_file_dialog,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
