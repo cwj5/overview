@@ -94,9 +94,30 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             }
 
             logger.info(`Exporting logs to ${filePath}...`);
-            await invoke("export_logs_to_file", { path: filePath });
-            logger.info(`Logs successfully exported`);
-            alert(`Logs exported to:\n${filePath}`);
+
+            // Get all logs (both frontend and backend merged)
+            const backendLogs = await logger.fetchBackendLogs();
+            const allLogs = [...backendLogs, ...logger.getLogs()].sort((a, b) => {
+                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            });
+
+            // Format logs as text
+            let logText = "Mehu PLOT3D Viewer - Log Export\n";
+            logText += "================================\n";
+            logText += `Exported: ${new Date().toLocaleString()}\n`;
+            logText += `Total entries: ${allLogs.length}\n`;
+            logText += "================================\n\n";
+
+            for (const log of allLogs) {
+                const moduleStr = log.module ? ` [${log.module}]` : '';
+                logText += `[${log.timestamp}] ${log.source} ${log.level}${moduleStr} ${log.message}\n`;
+            }
+
+            // Write to file using Tauri's fs
+            await invoke("write_text_file", { path: filePath, contents: logText });
+
+            logger.info(`Logs successfully exported (${allLogs.length} entries)`);
+            alert(`Logs exported to:\n${filePath}\n\n${allLogs.length} entries written`);
         } catch (error) {
             const errorMsg = `Failed to export logs: ${error}`;
             logger.error(errorMsg);

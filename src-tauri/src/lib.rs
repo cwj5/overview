@@ -42,6 +42,26 @@ fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
                 metadata.num_grids, dims_str
             ));
 
+            // Debug: Validate grid data
+            for (idx, grid) in grids.iter().enumerate() {
+                let expected_points = grid.total_points();
+                log_debug(&format!(
+                    "Grid {}: expected {} points, got x:{}, y:{}, z:{}",
+                    idx,
+                    expected_points,
+                    grid.x_coords.len(),
+                    grid.y_coords.len(),
+                    grid.z_coords.len()
+                ));
+
+                if grid.x_coords.len() > 0 {
+                    log_debug(&format!(
+                        "Grid {} sample: x[0]={}, y[0]={}, z[0]={}",
+                        idx, grid.x_coords[0], grid.y_coords[0], grid.z_coords[0]
+                    ));
+                }
+            }
+
             Ok(grids)
         }
         Err(e) => {
@@ -143,6 +163,39 @@ fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
         "Converting grid ({}x{}x{}) to mesh geometry",
         grid.dimensions.i, grid.dimensions.j, grid.dimensions.k
     ));
+
+    // Validate grid data
+    let total_points = grid.total_points();
+    if grid.x_coords.len() != total_points {
+        let error_msg = format!(
+            "Invalid grid: x_coords length {} != expected {} ({}x{}x{})",
+            grid.x_coords.len(),
+            total_points,
+            grid.dimensions.i,
+            grid.dimensions.j,
+            grid.dimensions.k
+        );
+        log_error(&error_msg);
+        return Err(error_msg);
+    }
+    if grid.y_coords.len() != total_points {
+        let error_msg = format!(
+            "Invalid grid: y_coords length {} != expected {}",
+            grid.y_coords.len(),
+            total_points
+        );
+        log_error(&error_msg);
+        return Err(error_msg);
+    }
+    if grid.z_coords.len() != total_points {
+        let error_msg = format!(
+            "Invalid grid: z_coords length {} != expected {}",
+            grid.z_coords.len(),
+            total_points
+        );
+        log_error(&error_msg);
+        return Err(error_msg);
+    }
 
     let mesh = grid.to_mesh_geometry();
 
@@ -256,6 +309,26 @@ async fn save_log_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, S
     Ok(file_path.map(|f| f.to_string()))
 }
 
+/// Write text content to a file
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    use std::fs;
+    use std::io::Write;
+
+    let mut file =
+        fs::File::create(&path).map_err(|e| format!("Failed to create file {}: {}", path, e))?;
+
+    file.write_all(contents.as_bytes())
+        .map_err(|e| format!("Failed to write to file {}: {}", path, e))?;
+
+    log_info(&format!(
+        "Successfully wrote {} bytes to {}",
+        contents.len(),
+        path
+    ));
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
@@ -280,6 +353,7 @@ pub fn run() {
             clear_log_entries,
             export_logs_to_file,
             save_log_file_dialog,
+            write_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

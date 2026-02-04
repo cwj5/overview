@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { BufferGeometry, BufferAttribute } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
+import type { GridItem } from '../types/grids';
+import { getVisibleGridItems } from '../utils/gridUtils';
 
 interface MeshGeometry {
     vertices: number[];
@@ -13,23 +15,22 @@ interface MeshGeometry {
     face_count: number;
 }
 
-interface Plot3DGrid {
-    dimensions: { i: number; j: number; k: number };
-    x_coords: number[];
-    y_coords: number[];
-    z_coords: number[];
-}
-
 interface Viewer3DProps {
-    gridData?: Plot3DGrid;
+    grids: GridItem[];
+    selectedGridId: string | null;
+    isolateSelected: boolean;
 }
 
 function MeshRenderer({
     meshGeometry,
     wireframe,
+    color,
+    dimmed,
 }: {
     meshGeometry: MeshGeometry;
     wireframe: boolean;
+    color: string;
+    dimmed: boolean;
 }) {
     const geometry = useMemo(() => {
         const geo = new BufferGeometry();
@@ -47,50 +48,172 @@ function MeshRenderer({
 
     return (
         <mesh geometry={geometry}>
-            <meshStandardMaterial color="#6366f1" wireframe={wireframe} />
+            <meshStandardMaterial
+                color={color}
+                wireframe={wireframe}
+                transparent={dimmed}
+                opacity={dimmed ? 0.35 : 1}
+            />
         </mesh>
     );
 }
 
-export default function Viewer3D({ gridData }: Viewer3DProps) {
+export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Viewer3DProps) {
     const [wireframe, setWireframe] = useState(true);
-    const [meshGeometry, setMeshGeometry] = useState<MeshGeometry | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
+    const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
+    const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
 
+    type MeshResult = { id: string; mesh: MeshGeometry } | { id: string; error: string };
+
     useEffect(() => {
-        if (!gridData) {
-            setMeshGeometry(null);
+        if (grids.length === 0) {
+            setMeshById({});
+            setLoadingIds(new Set());
             setError(null);
+        }
+    }, [grids.length]);
+
+    useEffect(() => {
+        if (grids.length === 0) {
             return;
         }
 
-        setIsLoading(true);
+        const missing = grids.filter((grid) => !meshById[grid.id]);
+        if (missing.length === 0) {
+            return;
+        }
+
+        let isCancelled = false;
         setError(null);
+        setLoadingIds((prev) => {
+            const next = new Set(prev);
+            missing.forEach((grid) => next.add(grid.id));
+            return next;
+        });
 
-        console.log('Grid data type:', typeof gridData);
-        console.log('Is array:', Array.isArray(gridData));
-        console.log('Calling convert_grid_to_mesh with:', gridData);
-        logger.debug('Converting grid to mesh geometry', 'Viewer3D');
+        logger.debug(`Converting ${missing.length} grid(s) to mesh geometry`, 'Viewer3D');
 
-        invoke<MeshGeometry>('convert_grid_to_mesh', { grid: gridData })
-            .then((mesh) => {
-                console.log('Mesh generated successfully:', mesh);
-                logger.info(`Mesh generated: ${mesh.vertex_count} vertices, ${mesh.face_count} faces`, 'Viewer3D');
-                setMeshGeometry(mesh);
-                setIsLoading(false);
+        Promise.all(
+            missing.map(async (gridItem) => {
+                try {
+                    logger.debug(`Converting grid ${gridItem.id} (${gridItem.grid.dimensions.i}x${gridItem.grid.dimensions.j}x${gridItem.grid.dimensions.k})`, 'Viewer3D');
+
+                    // Check if coordinate arrays exist before creating clean copy
+                    if (!gridItem.grid.x_coords || !gridItem.grid.y_coords || !gridItem.grid.z_coords) {
+                        throw new Error(`Missing coordinate arrays: x:${!!gridItem.grid.x_coords}, y:${!!gridItem.grid.y_coords}, z:${!!gridItem.grid.z_coords}`);
+                    }
+
+                    logger.debug(`Grid ${gridItem.id} coords check: x.length=${gridItem.grid.x_coords.length}, y.length=${gridItem.grid.y_coords.length}, z.length=${gridItem.grid.z_coords.length}`, 'Viewer3D');
+
+                    // Check for null/undefined/NaN/Infinity values in arrays
+                    const checkArray = (arr: number[], name: string) => {
+                        for (let i = 0; i < Math.min(5, arr.length); i++) {
+                            const val = arr[i];
+                            if (val === null || val === undefined) {
+                                throw new Error(`${name}[${i}] is null/undefined`);
+                            }
+                            if (!Number.isFinite(val)) {
+                                throw new Error(`${name}[${i}] is not finite: ${val}`);
+                            }
+                            logger.debug(`${name}[${i}]=${val}`, 'Viewer3D');
+                        }
+
+                        // Check for any invalid values in the whole array
+                        const invalidIdx = arr.findIndex(v => v === null || v === undefined || !Number.isFinite(v));
+                        if (invalidIdx !== -1) {
+                            throw new Error(`${name}[${invalidIdx}] is invalid: ${arr[invalidIdx]}`);
+                        }
+                    };
+
+                    checkArray(gridItem.grid.x_coords, 'x');
+                    checkArray(gridItem.grid.y_coords, 'y');
+                    checkArray(gridItem.grid.z_coords, 'z');
+
+                    // Create a clean copy of the grid data to ensure proper serialization
+                    const cleanGrid = {
+                        dimensions: {
+                            i: gridItem.grid.dimensions.i,
+                            j: gridItem.grid.dimensions.j,
+                            k: gridItem.grid.dimensions.k,
+                        },
+                        x_coords: Array.from(gridItem.grid.x_coords),
+                        y_coords: Array.from(gridItem.grid.y_coords),
+                        z_coords: Array.from(gridItem.grid.z_coords),
+                    };
+
+                    logger.debug(`Clean grid created, sample: x[0]=${cleanGrid.x_coords[0]}, y[0]=${cleanGrid.y_coords[0]}, z[0]=${cleanGrid.z_coords[0]}`, 'Viewer3D');
+
+                    const mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', { grid: cleanGrid });
+                    return { id: gridItem.id, mesh };
+                } catch (err) {
+                    const errorMsg = String(err);
+                    logger.error(`Failed to convert grid ${gridItem.id}: ${errorMsg}`, 'Viewer3D');
+                    return { id: gridItem.id, error: errorMsg };
+                }
             })
-            .catch((err) => {
-                const errorMsg = String(err);
-                console.error('Error converting grid to mesh:', errorMsg);
-                logger.error(`Failed to convert grid to mesh: ${errorMsg}`, 'Viewer3D');
+        ).then((results: MeshResult[]) => {
+            if (isCancelled) {
+                return;
+            }
+
+            const errors = results.filter((result) => "error" in result) as { id: string; error: string }[];
+            if (errors.length > 0) {
+                const errorDetails = errors.map(e => `${e.id}: ${e.error}`).join('\n');
+                const errorMsg = `Failed to convert ${errors.length} grid(s) to mesh:\n${errorDetails}`;
+                logger.error(errorMsg, 'Viewer3D');
                 setError(errorMsg);
-                setIsLoading(false);
+            }
+
+            setMeshById((prev) => {
+                const next = { ...prev };
+                results.forEach((result) => {
+                    if ("mesh" in result) {
+                        next[result.id] = result.mesh;
+                        logger.info(
+                            `Mesh generated for ${result.id}: ${result.mesh.vertex_count} vertices, ${result.mesh.face_count} faces`,
+                            'Viewer3D'
+                        );
+                    }
+                });
+                return next;
             });
-    }, [gridData]);
+
+            setLoadingIds((prev) => {
+                const next = new Set(prev);
+                results.forEach((result) => next.delete(result.id));
+                return next;
+            });
+        });
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [grids]);
+
+    const visibleGrids = useMemo(
+        () => getVisibleGridItems(grids, selectedGridId, isolateSelected),
+        [grids, isolateSelected, selectedGridId]
+    );
+
+    const stats = useMemo(() => {
+        return visibleGrids.reduce(
+            (acc, grid) => {
+                const mesh = meshById[grid.id];
+                if (mesh) {
+                    acc.vertices += mesh.vertex_count;
+                    acc.faces += mesh.face_count;
+                }
+                return acc;
+            },
+            { vertices: 0, faces: 0 }
+        );
+    }, [meshById, visibleGrids]);
+
+    const isLoading = loadingIds.size > 0;
 
     return (
-        <div style={{ width: '100%', height: '100vh', position: 'relative' }}>
+        <div style={{ width: '100%', height: '100%', position: 'relative' }}>
             <Canvas camera={{ position: [5, 5, 5], fov: 50 }}>
                 <ambientLight intensity={0.5} />
                 <directionalLight position={[10, 10, 5]} intensity={1} />
@@ -99,8 +222,23 @@ export default function Viewer3D({ gridData }: Viewer3DProps) {
                 <Grid args={[10, 10]} />
 
                 {/* Render actual mesh or placeholder */}
-                {meshGeometry ? (
-                    <MeshRenderer meshGeometry={meshGeometry} wireframe={wireframe} />
+                {visibleGrids.length > 0 ? (
+                    visibleGrids.map((gridItem) => {
+                        const mesh = meshById[gridItem.id];
+                        if (!mesh) {
+                            return null;
+                        }
+                        const dimmed = !!selectedGridId && gridItem.id !== selectedGridId && !isolateSelected;
+                        return (
+                            <MeshRenderer
+                                key={gridItem.id}
+                                meshGeometry={mesh}
+                                wireframe={wireframe}
+                                color={gridItem.color}
+                                dimmed={dimmed}
+                            />
+                        );
+                    })
                 ) : (
                     <mesh>
                         <boxGeometry args={[1, 1, 1]} />
@@ -139,11 +277,13 @@ export default function Viewer3D({ gridData }: Viewer3DProps) {
 
                 {isLoading && <div style={{ marginTop: '10px' }}>Loading mesh...</div>}
 
-                {meshGeometry && (
+                {visibleGrids.length > 0 && (
                     <div style={{ marginTop: '10px', fontSize: '0.9em' }}>
-                        Vertices: {meshGeometry.vertex_count}
+                        Visible grids: {visibleGrids.length}
                         <br />
-                        Faces: {meshGeometry.face_count}
+                        Vertices: {stats.vertices}
+                        <br />
+                        Faces: {stats.faces}
                     </div>
                 )}
             </div>

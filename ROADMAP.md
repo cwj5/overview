@@ -32,6 +32,9 @@ This document outlines the future development work needed to create a full-featu
   - [x] Single-grid format
   - [x] Multi-grid format
   - [x] Both whole and plane formats
+  - [x] Fortran unformatted record markers
+  - [x] Auto-detect single (f32) vs double (f64) precision
+  - [x] Combined XYZ records and separate XYZ records
 - [x] Add ASCII PLOT3D grid file reader
 - [x] Implement PLOT3D solution file reader (Q files)
   - [x] Binary format
@@ -63,12 +66,12 @@ This document outlines the future development work needed to create a full-featu
   - [ ] Frustum culling
   - [ ] Instancing for repeated geometry
 
-### 1.5 Multi-Grid Support
-- [ ] Render multiple grids simultaneously
-- [ ] Color-code different grids
-- [ ] Toggle visibility per grid
-- [ ] Grid selection and isolation
-- [ ] Display grid hierarchy/tree structure
+### 1.5 Multi-Grid Support ✅
+- [x] Render multiple grids simultaneously
+- [x] Color-code different grids
+- [x] Toggle visibility per grid
+- [x] Grid selection and isolation
+- [x] Display grid hierarchy/tree structure
 
 ## Phase 2: Rendering Modes and Visualization
 
