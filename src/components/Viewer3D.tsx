@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Grid } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import { useState, useEffect, useMemo } from 'react';
 import { BufferGeometry, BufferAttribute } from 'three';
 import { invoke } from '@tauri-apps/api/core';
@@ -186,36 +186,23 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                 <ambientLight intensity={0.5} />
                 <directionalLight position={[10, 10, 5]} intensity={1} />
 
-                {/* Grid for reference */}
-                <Grid args={[10, 10]} />
-
-                {/* Render actual mesh or placeholder */}
-                {visibleGrids.length > 0 ? (
-                    visibleGrids.map((gridItem) => {
-                        const mesh = meshById[gridItem.id];
-                        if (!mesh) {
-                            return null;
-                        }
-                        const dimmed = !!selectedGridId && gridItem.id !== selectedGridId && !isolateSelected;
-                        return (
-                            <MeshRenderer
-                                key={gridItem.id}
-                                meshGeometry={mesh}
-                                wireframe={wireframe}
-                                color={gridItem.color}
-                                dimmed={dimmed}
-                            />
-                        );
-                    })
-                ) : (
-                    <mesh>
-                        <boxGeometry args={[1, 1, 1]} />
-                        <meshStandardMaterial
-                            color="#6366f1"
+                {/* Render actual mesh */}
+                {visibleGrids.map((gridItem) => {
+                    const mesh = meshById[gridItem.id];
+                    if (!mesh) {
+                        return null;
+                    }
+                    const dimmed = !!selectedGridId && gridItem.id !== selectedGridId && !isolateSelected;
+                    return (
+                        <MeshRenderer
+                            key={gridItem.id}
+                            meshGeometry={mesh}
                             wireframe={wireframe}
+                            color={gridItem.color}
+                            dimmed={dimmed}
                         />
-                    </mesh>
-                )}
+                    );
+                })}
 
                 {/* Camera controls */}
                 <OrbitControls enableDamping dampingFactor={0.05} />
