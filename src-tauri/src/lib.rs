@@ -7,7 +7,8 @@ mod logger_tests;
 use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, LogEntry};
 use plot3d::{
     read_plot3d_function, read_plot3d_grid_ascii, read_plot3d_grid_with_metadata,
-    read_plot3d_solution, read_plot3d_solution_ascii, Plot3DFunction, Plot3DGrid, Plot3DSolution,
+    read_plot3d_solution, read_plot3d_solution_ascii, MeshGeometry, Plot3DFunction, Plot3DGrid,
+    Plot3DSolution,
 };
 use std::path::Path;
 use tauri_plugin_dialog::DialogExt;
@@ -135,6 +136,24 @@ fn load_plot3d_function(path: String) -> Result<Vec<Plot3DFunction>, String> {
     }
 }
 
+/// Convert PLOT3D grid to Three.js mesh geometry
+#[tauri::command]
+fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
+    log_debug(&format!(
+        "Converting grid ({}x{}x{}) to mesh geometry",
+        grid.dimensions.i, grid.dimensions.j, grid.dimensions.k
+    ));
+
+    let mesh = grid.to_mesh_geometry();
+
+    log_info(&format!(
+        "Generated mesh with {} vertices and {} faces",
+        mesh.vertex_count, mesh.face_count
+    ));
+
+    Ok(mesh)
+}
+
 #[tauri::command]
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let file_path = app
@@ -253,6 +272,7 @@ pub fn run() {
             load_plot3d_solution,
             load_plot3d_solution_ascii,
             load_plot3d_function,
+            convert_grid_to_mesh,
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,

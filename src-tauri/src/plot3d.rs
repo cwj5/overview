@@ -44,9 +44,19 @@ pub struct Plot3DFunction {
 /// Grid dimensions (I, J, K)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridDimensions {
-    pub i: usize,
-    pub j: usize,
-    pub k: usize,
+    pub i: u32,
+    pub j: u32,
+    pub k: u32,
+}
+
+/// Mesh geometry suitable for Three.js rendering
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshGeometry {
+    pub vertices: Vec<f32>, // Flat array of x, y, z coordinates
+    pub indices: Vec<u32>,  // Triangle indices
+    pub normals: Vec<f32>,  // Computed vertex normals
+    pub vertex_count: usize,
+    pub face_count: usize,
 }
 
 /// Byte order detection
@@ -59,21 +69,171 @@ pub enum ByteOrder {
 impl Plot3DGrid {
     /// Calculate total number of points
     pub fn total_points(&self) -> usize {
-        self.dimensions.i * self.dimensions.j * self.dimensions.k
+        (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
+    }
+
+    /// Convert PLOT3D grid to Three.js mesh geometry
+    /// This creates a wireframe surface by connecting grid points
+    pub fn to_mesh_geometry(&self) -> MeshGeometry {
+        let i = self.dimensions.i as usize;
+        let j = self.dimensions.j as usize;
+        let k = self.dimensions.k as usize;
+        let total_points = self.total_points();
+
+        // Convert coordinates to vertex array (x, y, z interleaved)
+        let mut vertices = Vec::with_capacity(total_points * 3);
+        for idx in 0..total_points {
+            vertices.push(self.x_coords[idx]);
+            vertices.push(self.y_coords[idx]);
+            vertices.push(self.z_coords[idx]);
+        }
+
+        // Generate indices for surface triangulation
+        // For a structured grid, we create quads and triangulate them
+        let mut indices = Vec::new();
+
+        // Triangulate I-J planes (constant K surfaces)
+        for k_idx in 0..k {
+            for j_idx in 0..j - 1 {
+                for i_idx in 0..i - 1 {
+                    let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                    let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
+                    let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
+                    let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
+
+                    // First triangle of quad
+                    indices.push(idx00 as u32);
+                    indices.push(idx10 as u32);
+                    indices.push(idx01 as u32);
+
+                    // Second triangle of quad
+                    indices.push(idx10 as u32);
+                    indices.push(idx11 as u32);
+                    indices.push(idx01 as u32);
+                }
+            }
+        }
+
+        // Triangulate I-K planes (constant J surfaces)
+        if k > 1 {
+            for j_idx in 0..j {
+                for k_idx in 0..k - 1 {
+                    for i_idx in 0..i - 1 {
+                        let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                        let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
+                        let idx01 = Self::linear_index(i_idx, j_idx, k_idx + 1, i, j);
+                        let idx11 = Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j);
+
+                        indices.push(idx00 as u32);
+                        indices.push(idx10 as u32);
+                        indices.push(idx01 as u32);
+
+                        indices.push(idx10 as u32);
+                        indices.push(idx11 as u32);
+                        indices.push(idx01 as u32);
+                    }
+                }
+            }
+        }
+
+        // Triangulate J-K planes (constant I surfaces)
+        if j > 1 && k > 1 {
+            for i_idx in 0..i {
+                for k_idx in 0..k - 1 {
+                    for j_idx in 0..j - 1 {
+                        let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                        let idx10 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
+                        let idx01 = Self::linear_index(i_idx, j_idx, k_idx + 1, i, j);
+                        let idx11 = Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j);
+
+                        indices.push(idx00 as u32);
+                        indices.push(idx10 as u32);
+                        indices.push(idx01 as u32);
+
+                        indices.push(idx10 as u32);
+                        indices.push(idx11 as u32);
+                        indices.push(idx01 as u32);
+                    }
+                }
+            }
+        }
+
+        // Compute vertex normals
+        let mut normals = vec![0.0f32; total_points * 3];
+        let face_count = indices.len() / 3;
+
+        for face_idx in 0..face_count {
+            let i0 = indices[face_idx * 3] as usize;
+            let i1 = indices[face_idx * 3 + 1] as usize;
+            let i2 = indices[face_idx * 3 + 2] as usize;
+
+            let v0 = [vertices[i0 * 3], vertices[i0 * 3 + 1], vertices[i0 * 3 + 2]];
+            let v1 = [vertices[i1 * 3], vertices[i1 * 3 + 1], vertices[i1 * 3 + 2]];
+            let v2 = [vertices[i2 * 3], vertices[i2 * 3 + 1], vertices[i2 * 3 + 2]];
+
+            // Compute face normal using cross product
+            let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+
+            let normal = [
+                edge1[1] * edge2[2] - edge1[2] * edge2[1],
+                edge1[2] * edge2[0] - edge1[0] * edge2[2],
+                edge1[0] * edge2[1] - edge1[1] * edge2[0],
+            ];
+
+            // Add to vertex normals
+            normals[i0 * 3] += normal[0];
+            normals[i0 * 3 + 1] += normal[1];
+            normals[i0 * 3 + 2] += normal[2];
+
+            normals[i1 * 3] += normal[0];
+            normals[i1 * 3 + 1] += normal[1];
+            normals[i1 * 3 + 2] += normal[2];
+
+            normals[i2 * 3] += normal[0];
+            normals[i2 * 3 + 1] += normal[1];
+            normals[i2 * 3 + 2] += normal[2];
+        }
+
+        // Normalize normals
+        for i in (0..normals.len()).step_by(3) {
+            let len = (normals[i] * normals[i]
+                + normals[i + 1] * normals[i + 1]
+                + normals[i + 2] * normals[i + 2])
+                .sqrt();
+            if len > 0.0 {
+                normals[i] /= len;
+                normals[i + 1] /= len;
+                normals[i + 2] /= len;
+            }
+        }
+
+        MeshGeometry {
+            vertices,
+            indices,
+            normals,
+            vertex_count: total_points,
+            face_count,
+        }
+    }
+
+    /// Helper function to convert 3D grid index to linear index
+    fn linear_index(i: usize, j: usize, k: usize, dim_i: usize, dim_j: usize) -> usize {
+        k * dim_i * dim_j + j * dim_i + i
     }
 }
 
 impl Plot3DSolution {
     /// Calculate total number of points
     pub fn total_points(&self) -> usize {
-        self.dimensions.i * self.dimensions.j * self.dimensions.k
+        (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
     }
 }
 
 impl Plot3DFunction {
     /// Calculate total number of points
     pub fn total_points(&self) -> usize {
-        self.dimensions.i * self.dimensions.j * self.dimensions.k
+        (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
     }
 }
 
@@ -123,9 +283,9 @@ pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> 
     // Read dimensions for all grids first (PLOT3D whole format)
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
     for _ in 0..num_grids {
-        let i = read_i32(&mut reader, byte_order)? as usize;
-        let j = read_i32(&mut reader, byte_order)? as usize;
-        let k = read_i32(&mut reader, byte_order)? as usize;
+        let i = read_i32(&mut reader, byte_order)? as u32;
+        let j = read_i32(&mut reader, byte_order)? as u32;
+        let k = read_i32(&mut reader, byte_order)? as u32;
 
         if i == 0 || j == 0 || k == 0 {
             return Err(io::Error::new(
@@ -139,7 +299,7 @@ pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> 
 
     // Read coordinate data for each grid
     for dims in dimensions_list {
-        let total_points = dims.i * dims.j * dims.k;
+        let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
         let x_coords = read_f32_array(&mut reader, total_points, byte_order)?;
         let y_coords = read_f32_array(&mut reader, total_points, byte_order)?;
@@ -185,9 +345,9 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
     // Read dimensions for all grids first (PLOT3D whole format)
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
     for _ in 0..num_grids {
-        let i = read_i32(&mut reader, byte_order)? as usize;
-        let j = read_i32(&mut reader, byte_order)? as usize;
-        let k = read_i32(&mut reader, byte_order)? as usize;
+        let i = read_i32(&mut reader, byte_order)? as u32;
+        let j = read_i32(&mut reader, byte_order)? as u32;
+        let k = read_i32(&mut reader, byte_order)? as u32;
 
         if i == 0 || j == 0 || k == 0 {
             return Err(io::Error::new(
@@ -203,7 +363,7 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
 
     // Read coordinate data for each grid
     for dims in dimensions_list {
-        let total_points = dims.i * dims.j * dims.k;
+        let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
         let x_coords = read_f32_array(&mut reader, total_points, byte_order)?;
         let y_coords = read_f32_array(&mut reader, total_points, byte_order)?;
@@ -257,9 +417,9 @@ pub fn read_plot3d_grid_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DG
         let dims_line = lines.next().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "Missing dimension line")
         })??;
-        let dims: Vec<usize> = dims_line
+        let dims: Vec<u32> = dims_line
             .split_whitespace()
-            .map(|s| s.parse::<usize>())
+            .map(|s| s.parse::<u32>())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Cannot parse dimensions"))?;
 
@@ -286,7 +446,7 @@ pub fn read_plot3d_grid_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DG
 
     // Read coordinate data for each grid
     for dims in dimensions_list {
-        let total_points = dims.i * dims.j * dims.k;
+        let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
         let mut x_coords = Vec::with_capacity(total_points);
         let mut y_coords = Vec::with_capacity(total_points);
         let mut z_coords = Vec::with_capacity(total_points);
@@ -377,9 +537,9 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
     // Read dimensions for all grids
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
     for _ in 0..num_grids {
-        let i = read_i32(&mut reader, byte_order)? as usize;
-        let j = read_i32(&mut reader, byte_order)? as usize;
-        let k = read_i32(&mut reader, byte_order)? as usize;
+        let i = read_i32(&mut reader, byte_order)? as u32;
+        let j = read_i32(&mut reader, byte_order)? as u32;
+        let k = read_i32(&mut reader, byte_order)? as u32;
 
         if i == 0 || j == 0 || k == 0 {
             return Err(io::Error::new(
@@ -393,7 +553,7 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
 
     // Read solution data for each grid (5 variables: rho, rhou, rhov, rhow, rhoe)
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
-        let total_points = dims.i * dims.j * dims.k;
+        let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
         let rho = read_f32_array(&mut reader, total_points, byte_order)?;
         let rhou = read_f32_array(&mut reader, total_points, byte_order)?;
@@ -445,9 +605,9 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
         let dims_line = lines.next().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "Missing dimension line")
         })??;
-        let dims: Vec<usize> = dims_line
+        let dims: Vec<u32> = dims_line
             .split_whitespace()
-            .map(|s| s.parse::<usize>())
+            .map(|s| s.parse::<u32>())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Cannot parse dimensions"))?;
 
@@ -467,7 +627,7 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
 
     // Read solution data for each grid (5 variables: rho, rhou, rhov, rhow, rhoe)
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
-        let total_points = dims.i * dims.j * dims.k;
+        let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
         let mut rho = Vec::with_capacity(total_points);
         let mut rhou = Vec::with_capacity(total_points);
         let mut rhov = Vec::with_capacity(total_points);
@@ -561,9 +721,9 @@ pub fn read_plot3d_function<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DFun
     // Read dimensions for all grids
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
     for _ in 0..num_grids {
-        let i = read_i32(&mut reader, byte_order)? as usize;
-        let j = read_i32(&mut reader, byte_order)? as usize;
-        let k = read_i32(&mut reader, byte_order)? as usize;
+        let i = read_i32(&mut reader, byte_order)? as u32;
+        let j = read_i32(&mut reader, byte_order)? as u32;
+        let k = read_i32(&mut reader, byte_order)? as u32;
 
         if i == 0 || j == 0 || k == 0 {
             return Err(io::Error::new(
@@ -577,7 +737,7 @@ pub fn read_plot3d_function<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DFun
 
     // Read function data for each grid
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
-        let total_points = dims.i * dims.j * dims.k;
+        let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
         // Read number of functions
         let num_functions = read_i32(&mut reader, byte_order)? as usize;
@@ -837,5 +997,125 @@ mod tests {
         assert_eq!(ByteOrder::LittleEndian, ByteOrder::LittleEndian);
         assert_eq!(ByteOrder::BigEndian, ByteOrder::BigEndian);
         assert_ne!(ByteOrder::LittleEndian, ByteOrder::BigEndian);
+    }
+
+    #[test]
+    fn test_mesh_geometry_simple_grid() {
+        // Create a simple 2x2x1 grid
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 1 },
+            x_coords: vec![0.0, 1.0, 0.0, 1.0],
+            y_coords: vec![0.0, 0.0, 1.0, 1.0],
+            z_coords: vec![0.0, 0.0, 0.0, 0.0],
+        };
+
+        let mesh = grid.to_mesh_geometry();
+
+        // Check vertex count
+        assert_eq!(mesh.vertex_count, 4);
+        assert_eq!(mesh.vertices.len(), 12); // 4 vertices * 3 components
+
+        // Check vertices
+        assert_eq!(mesh.vertices[0], 0.0); // x of vertex 0
+        assert_eq!(mesh.vertices[1], 0.0); // y of vertex 0
+        assert_eq!(mesh.vertices[2], 0.0); // z of vertex 0
+
+        // Check that indices were generated
+        assert!(mesh.indices.len() > 0);
+        assert_eq!(mesh.face_count, mesh.indices.len() / 3);
+
+        // Check normals
+        assert_eq!(mesh.normals.len(), 12);
+    }
+
+    #[test]
+    fn test_mesh_geometry_larger_grid() {
+        // Create a 3x3x2 grid
+        let mut grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 2 },
+            x_coords: Vec::with_capacity(18),
+            y_coords: Vec::with_capacity(18),
+            z_coords: Vec::with_capacity(18),
+        };
+
+        // Fill with test data
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..2 {
+                    grid.x_coords.push(i as f32);
+                    grid.y_coords.push(j as f32);
+                    grid.z_coords.push(k as f32);
+                }
+            }
+        }
+
+        let mesh = grid.to_mesh_geometry();
+
+        assert_eq!(mesh.vertex_count, 18);
+        assert_eq!(mesh.vertices.len(), 54); // 18 * 3
+        assert!(mesh.indices.len() > 0);
+        assert_eq!(mesh.normals.len(), 54);
+    }
+
+    #[test]
+    fn test_mesh_linear_index_calculation() {
+        // Test the linear index calculation
+        let i = 1;
+        let j = 2;
+        let k = 1;
+        let dim_i = 3;
+        let dim_j = 4;
+
+        let idx = Plot3DGrid::linear_index(i, j, k, dim_i, dim_j);
+        // k * (i*j) + j * i + i = 1 * 12 + 2 * 3 + 1 = 19
+        assert_eq!(idx, 19);
+    }
+
+    #[test]
+    fn test_mesh_geometry_normals_normalized() {
+        // Create a simple grid and check that normals are normalized
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 1 },
+            x_coords: vec![0.0, 1.0, 0.0, 1.0],
+            y_coords: vec![0.0, 0.0, 1.0, 1.0],
+            z_coords: vec![0.0, 0.0, 0.0, 0.0],
+        };
+
+        let mesh = grid.to_mesh_geometry();
+
+        // Check that normals are normalized (length should be 1 or close to 0)
+        for i in (0..mesh.normals.len()).step_by(3) {
+            let nx = mesh.normals[i];
+            let ny = mesh.normals[i + 1];
+            let nz = mesh.normals[i + 2];
+            let length_sq = nx * nx + ny * ny + nz * nz;
+
+            // Should be either ~1 (normalized) or ~0 (no normal contribution)
+            assert!(
+                length_sq < 1.1 && (length_sq > 0.9 || length_sq < 0.01),
+                "Normal magnitude squared: {}",
+                length_sq
+            );
+        }
+    }
+
+    #[test]
+    fn test_mesh_geometry_preserves_coordinates() {
+        let coords = vec![1.5, 2.5, 3.5, 4.5];
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 1 },
+            x_coords: coords.clone(),
+            y_coords: coords.clone(),
+            z_coords: coords.clone(),
+        };
+
+        let mesh = grid.to_mesh_geometry();
+
+        // Check that coordinates are preserved in vertices
+        for i in 0..4 {
+            assert_eq!(mesh.vertices[i * 3], coords[i]);
+            assert_eq!(mesh.vertices[i * 3 + 1], coords[i]);
+            assert_eq!(mesh.vertices[i * 3 + 2], coords[i]);
+        }
     }
 }

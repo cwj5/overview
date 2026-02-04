@@ -42,7 +42,9 @@ function App() {
 
       // Load the PLOT3D file
       const data = await invoke("load_plot3d_file", { path: filePath });
-      setGridData(data);
+      // Pass only the first grid to the viewer for now
+      const firstGrid = Array.isArray(data) && data.length > 0 ? data[0] : null;
+      setGridData(firstGrid);
       logger.info(`Successfully loaded grid data`);
 
       // Extract metadata
@@ -53,16 +55,12 @@ function App() {
       };
 
       // Add dimensions if available
-      if (Array.isArray(data) && data.length > 0) {
-        metadata.numberOfGrids = data.length;
-        const firstGrid = data[0];
-        if (firstGrid && firstGrid.dimensions) {
-          metadata.dimensions = firstGrid.dimensions;
-        }
+      if (firstGrid && firstGrid.dimensions) {
+        metadata.dimensions = firstGrid.dimensions;
       }
 
       setFileMetadata(metadata);
-      logger.info(`File metadata: ${metadata.numberOfGrids} grid(s)`);
+      logger.info(`File metadata: dimensions ${metadata.dimensions?.i}x${metadata.dimensions?.j}x${metadata.dimensions?.k}`);
     } catch (e) {
       const errorMsg = String(e);
       setError(errorMsg);
@@ -92,7 +90,9 @@ function App() {
       // For now, just load the first file
       // TODO: Handle multiple files properly
       const data = await invoke("load_plot3d_file", { path: filePaths[0] });
-      setGridData(data);
+      // Pass only the first grid to the viewer for now
+      const firstGrid = Array.isArray(data) && data.length > 0 ? data[0] : null;
+      setGridData(firstGrid);
       logger.info(`Successfully loaded first file`);
 
       const fileName = filePaths[0].split(/[/\\]/).pop() || filePaths[0];
