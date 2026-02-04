@@ -3,6 +3,14 @@
 ## Overview
 This document outlines the future development work needed to create a full-featured PLOT3D visualization application that replicates the capabilities of NASA's original PLOT3D software.
 
+## Development Guidelines
+**Always add unit tests when implementing new capabilities**
+- Write tests alongside new features
+- Cover both happy paths and error cases
+- Test edge cases and invalid inputs
+- Ensure test isolation for shared state
+- Run `cargo test` before committing
+
 ## Current Status ✅
 - [x] Tauri + React + TypeScript project setup
 - [x] Three.js integration with React Three Fiber
@@ -45,10 +53,10 @@ This document outlines the future development work needed to create a full-featu
 - [x] Error reporting to user with helpful messages
 - [x] Performance event logging
 
-### 1.4 Mesh Rendering
-- [ ] Convert PLOT3D grid data to Three.js geometry
-- [ ] Render structured grid as wireframe
-- [ ] Implement surface extraction from 3D grids
+### 1.4 Mesh Rendering ✅
+- [x] Convert PLOT3D grid data to Three.js geometry
+- [x] Render structured grid as wireframe
+- [x] Implement surface extraction from 3D grids
 - [ ] Add grid line rendering with customizable density
 - [ ] Optimize for large meshes (million+ points)
   - [ ] Level of detail (LOD) system
