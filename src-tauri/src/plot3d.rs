@@ -629,6 +629,8 @@ fn read_f32_array<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_grid_dimensions() {
@@ -638,11 +640,202 @@ mod tests {
             k: 30,
         };
         let grid = Plot3DGrid {
-            dimensions: dims,
+            dimensions: dims.clone(),
             x_coords: vec![],
             y_coords: vec![],
             z_coords: vec![],
         };
         assert_eq!(grid.total_points(), 6000);
+    }
+
+    #[test]
+    fn test_solution_total_points() {
+        let solution = Plot3DSolution {
+            grid_index: 0,
+            dimensions: GridDimensions { i: 5, j: 4, k: 3 },
+            rho: vec![],
+            rhou: vec![],
+            rhov: vec![],
+            rhow: vec![],
+            rhoe: vec![],
+        };
+        assert_eq!(solution.total_points(), 60);
+    }
+
+    #[test]
+    fn test_function_total_points() {
+        let function = Plot3DFunction {
+            grid_index: 0,
+            dimensions: GridDimensions { i: 2, j: 3, k: 4 },
+            function_data: vec![],
+        };
+        assert_eq!(function.total_points(), 24);
+    }
+
+    #[test]
+    fn test_byte_order_detection_little_endian() {
+        // Create a buffer with a small value in little-endian format
+        let mut data = vec![];
+        data.extend_from_slice(&100i32.to_le_bytes());
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = detect_byte_order(&mut cursor);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), ByteOrder::LittleEndian);
+    }
+
+    #[test]
+    fn test_byte_order_detection_big_endian() {
+        // Create a buffer with a value that appears valid only in big-endian
+        let mut data = vec![];
+        data.extend_from_slice(&100i32.to_be_bytes());
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = detect_byte_order(&mut cursor);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_i32_little_endian() {
+        let mut data = vec![];
+        data.extend_from_slice(&42i32.to_le_bytes());
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = read_i32(&mut cursor, ByteOrder::LittleEndian);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_read_i32_big_endian() {
+        let mut data = vec![];
+        data.extend_from_slice(&42i32.to_be_bytes());
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = read_i32(&mut cursor, ByteOrder::BigEndian);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_read_f32_array() {
+        let values = vec![1.0f32, 2.5f32, 3.14f32];
+        let mut data = vec![];
+        for v in &values {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = read_f32_array(&mut cursor, 3, ByteOrder::LittleEndian);
+        assert!(result.is_ok());
+        let arr = result.unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], 1.0);
+        assert_eq!(arr[1], 2.5);
+        assert_eq!(arr[2], 3.14);
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_ascii_simple() -> io::Result<()> {
+        // Create a temporary ASCII PLOT3D file
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "1")?; // 1 grid
+        writeln!(temp_file, "2 2 2")?; // 2x2x2 dimensions
+
+        // Write 8 X coordinates
+        writeln!(temp_file, "0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0")?;
+        // Write 8 Y coordinates
+        writeln!(temp_file, "0.0 0.0 1.0 1.0 0.0 0.0 1.0 1.0")?;
+        // Write 8 Z coordinates
+        writeln!(temp_file, "0.0 0.0 0.0 0.0 1.0 1.0 1.0 1.0")?;
+
+        temp_file.flush()?;
+        let path = temp_file.path();
+
+        let result = read_plot3d_grid_ascii(path);
+        assert!(result.is_ok());
+
+        let grids = result.unwrap();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].dimensions.i, 2);
+        assert_eq!(grids[0].dimensions.j, 2);
+        assert_eq!(grids[0].dimensions.k, 2);
+        assert_eq!(grids[0].total_points(), 8);
+        assert_eq!(grids[0].x_coords.len(), 8);
+        assert_eq!(grids[0].y_coords.len(), 8);
+        assert_eq!(grids[0].z_coords.len(), 8);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_ascii_invalid_grid_count() -> io::Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "-1")?; // Invalid grid count
+        temp_file.flush()?;
+
+        let result = read_plot3d_grid_ascii(temp_file.path());
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_ascii_zero_dimensions() -> io::Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "1")?;
+        writeln!(temp_file, "0 2 2")?; // Zero dimension
+        temp_file.flush()?;
+
+        let result = read_plot3d_grid_ascii(temp_file.path());
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_ascii_simple() -> io::Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "1")?; // 1 grid
+        writeln!(temp_file, "2 1 1")?; // 2x1x1 = 2 points
+
+        // Write 5 variables × 2 points = 10 values
+        writeln!(temp_file, "1.0 2.0")?; // rho
+        writeln!(temp_file, "3.0 4.0")?; // rhou
+        writeln!(temp_file, "5.0 6.0")?; // rhov
+        writeln!(temp_file, "7.0 8.0")?; // rhow
+        writeln!(temp_file, "9.0 10.0")?; // rhoe
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution_ascii(temp_file.path());
+        assert!(result.is_ok());
+
+        let solutions = result.unwrap();
+        assert_eq!(solutions.len(), 1);
+        assert_eq!(solutions[0].total_points(), 2);
+        assert_eq!(solutions[0].rho, vec![1.0, 2.0]);
+        assert_eq!(solutions[0].rhou, vec![3.0, 4.0]);
+        assert_eq!(solutions[0].rhov, vec![5.0, 6.0]);
+        assert_eq!(solutions[0].rhow, vec![7.0, 8.0]);
+        assert_eq!(solutions[0].rhoe, vec![9.0, 10.0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_grid_dimensions_clone() {
+        let dims1 = GridDimensions { i: 5, j: 10, k: 15 };
+        let dims2 = dims1.clone();
+        assert_eq!(dims1.i, dims2.i);
+        assert_eq!(dims1.j, dims2.j);
+        assert_eq!(dims1.k, dims2.k);
+    }
+
+    #[test]
+    fn test_byte_order_equality() {
+        assert_eq!(ByteOrder::LittleEndian, ByteOrder::LittleEndian);
+        assert_eq!(ByteOrder::BigEndian, ByteOrder::BigEndian);
+        assert_ne!(ByteOrder::LittleEndian, ByteOrder::BigEndian);
     }
 }

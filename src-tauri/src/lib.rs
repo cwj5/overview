@@ -1,6 +1,9 @@
 mod logger;
 mod plot3d;
 
+#[cfg(test)]
+mod logger_tests;
+
 use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, LogEntry};
 use plot3d::{
     read_plot3d_function, read_plot3d_grid_ascii, read_plot3d_grid_with_metadata,

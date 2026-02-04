@@ -114,20 +114,3 @@ pub fn export_logs(path: &str) -> std::io::Result<()> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_log_entry_creation() {
-        let entry = LogEntry {
-            timestamp: "2024-01-01 12:00:00".to_string(),
-            level: "INFO".to_string(),
-            message: "Test message".to_string(),
-            module: Some("test".to_string()),
-        };
-        assert_eq!(entry.level, "INFO");
-        assert_eq!(entry.message, "Test message");
-    }
-}
