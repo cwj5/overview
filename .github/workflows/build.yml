@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       
@@ -43,6 +43,9 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
       - uses: actions/checkout@v4
       
@@ -55,18 +58,19 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          targets: ${{ matrix.target }}
           cache: true
       
       - name: Install npm dependencies
         run: npm install
       
       - name: Build
-        run: npm run tauri build
+        run: npm run tauri build -- --target ${{ matrix.target }}
       
       - name: Upload macOS app
         uses: actions/upload-artifact@v4
         with:
-          name: mehu-macos-app
+          name: mehu-macos-${{ matrix.target }}
           path: src-tauri/target/release/bundle/macos/
 
   build-windows:
