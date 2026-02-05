@@ -17,9 +17,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       
       - name: Install dependencies
         run: |
@@ -47,9 +50,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       
       - name: Install npm dependencies
         run: npm install
@@ -72,9 +78,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       
       - name: Install npm dependencies
         run: npm install
