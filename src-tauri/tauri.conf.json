@@ -38,9 +38,6 @@
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0"
-    },
-    "windows": {
-      "minimumSystemVersion": "10.0.0"
     }
   }
 }
