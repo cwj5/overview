@@ -21,8 +21,6 @@ jobs:
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          cache: true
       
       - name: Install dependencies
         run: |
@@ -59,7 +57,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          cache: true
       
       - name: Install npm dependencies
         run: npm install
@@ -71,7 +68,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mehu-macos-${{ matrix.target }}
-          path: src-tauri/target/release/bundle/macos/
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/
 
   build-windows:
     runs-on: windows-latest
@@ -86,8 +83,6 @@ jobs:
       
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          cache: true
       
       - name: Install npm dependencies
         run: npm install
