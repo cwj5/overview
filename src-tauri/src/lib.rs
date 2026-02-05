@@ -1,3 +1,17 @@
+// Copyright 2026 Charles W Jackson
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 mod logger;
 mod plot3d;
 
@@ -11,6 +25,8 @@ use plot3d::{
     Plot3DSolution,
 };
 use std::path::Path;
+use tauri::webview::WebviewWindow;
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -319,6 +335,25 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Open the About window
+#[tauri::command]
+async fn open_about_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("about") {
+        let _ = window.set_focus();
+        Ok(())
+    } else {
+        WebviewWindow::builder(&app, "about", tauri::WebviewUrl::App("/about.html".into()))
+            .title("About Mehu")
+            .inner_size(600.0, 700.0)
+            .resizable(true)
+            .minimizable(true)
+            .maximizable(false)
+            .build()
+            .map_err(|e| format!("Failed to create About window: {}", e))?;
+        Ok(())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
@@ -344,6 +379,7 @@ pub fn run() {
             export_logs_to_file,
             save_log_file_dialog,
             write_text_file,
+            open_about_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,20 @@
-import { useMemo, useState } from "react";
+// Copyright 2026 Charles W Jackson
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { useMemo, useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
 import Viewer3D from "./components/Viewer3D";
 import { LogViewer } from "./components/LogViewer";
 import { logger } from "./utils/logger";
@@ -50,6 +65,37 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [selectedGridId, setSelectedGridId] = useState<string | null>(null);
   const [isolateSelected, setIsolateSelected] = useState(false);
+
+  useEffect(() => {
+    const setupMenu = async () => {
+      try {
+        const aboutItem = await MenuItem.new({
+          id: "about",
+          text: "About Mehu",
+          action: () => {
+            invoke("open_about_window").catch((err) =>
+              logger.error(`Failed to open About window: ${err}`)
+            );
+          },
+        });
+
+        const fileSubmenu = await Submenu.new({
+          text: "File",
+          items: [aboutItem],
+        });
+
+        const menu = await Menu.new({
+          items: [fileSubmenu],
+        });
+
+        await menu.setAsAppMenu();
+      } catch (err) {
+        logger.error(`Failed to setup menu: ${err}`);
+      }
+    };
+
+    setupMenu();
+  }, []);
 
   const gridTree = useMemo(() => groupGridsByFile(grids), [grids]);
   const selectedGrid = useMemo(
@@ -163,7 +209,9 @@ function App() {
         flexWrap: 'wrap',
         flexShrink: 0
       }}>
-        <h1 style={{ margin: 0, fontSize: '20px' }}>Mehu - PLOT3D Viewer</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <h1 style={{ margin: 0, fontSize: '20px' }}>Mehu - PLOT3D Viewer</h1>
+        </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
             onClick={loadFile}

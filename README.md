@@ -2,6 +2,8 @@
 
 A modern, cross-platform application for visualizing CFD (Computational Fluid Dynamics) grid and solution data in PLOT3D format.
 
+> **About the Name**: "Mehu" is a Twi phrase (a language spoken in Ghana) meaning "I see" — reflecting the core purpose of this visualization tool.
+
 ## Features
 
 - **PLOT3D File Support**: Read and parse PLOT3D binary grid files
