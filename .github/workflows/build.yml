@@ -10,6 +10,8 @@ on:
 jobs:
   build-linux:
     runs-on: ubuntu-22.04
+    container:
+      image: quay.io/centos/centos:stream8
     steps:
       - uses: actions/checkout@v4
       
