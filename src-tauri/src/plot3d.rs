@@ -110,74 +110,31 @@ impl Plot3DGrid {
         }
 
         // Generate indices for surface triangulation
-        // For a structured grid, we create quads and triangulate them
+        // For a structured grid, we only render the k=1 surface (k=0 in 0-indexed)
         let mut indices = Vec::new();
 
-        // Triangulate I-J planes (constant K surfaces)
-        for k_idx in 0..k {
-            for j_idx in 0..j - 1 {
-                for i_idx in 0..i - 1 {
-                    let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                    let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
-                    let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
-                    let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
+        // Triangulate I-J planes (constant K surfaces) - only k=0
+        let k_idx = 0;
+        for j_idx in 0..j - 1 {
+            for i_idx in 0..i - 1 {
+                let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
+                let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
+                let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
 
-                    // First triangle of quad
-                    indices.push(idx00 as u32);
-                    indices.push(idx10 as u32);
-                    indices.push(idx01 as u32);
+                // First triangle of quad
+                indices.push(idx00 as u32);
+                indices.push(idx10 as u32);
+                indices.push(idx01 as u32);
 
-                    // Second triangle of quad
-                    indices.push(idx10 as u32);
-                    indices.push(idx11 as u32);
-                    indices.push(idx01 as u32);
-                }
+                // Second triangle of quad
+                indices.push(idx10 as u32);
+                indices.push(idx11 as u32);
+                indices.push(idx01 as u32);
             }
         }
 
-        // Triangulate I-K planes (constant J surfaces)
-        if k > 1 {
-            for j_idx in 0..j {
-                for k_idx in 0..k - 1 {
-                    for i_idx in 0..i - 1 {
-                        let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                        let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
-                        let idx01 = Self::linear_index(i_idx, j_idx, k_idx + 1, i, j);
-                        let idx11 = Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j);
-
-                        indices.push(idx00 as u32);
-                        indices.push(idx10 as u32);
-                        indices.push(idx01 as u32);
-
-                        indices.push(idx10 as u32);
-                        indices.push(idx11 as u32);
-                        indices.push(idx01 as u32);
-                    }
-                }
-            }
-        }
-
-        // Triangulate J-K planes (constant I surfaces)
-        if j > 1 && k > 1 {
-            for i_idx in 0..i {
-                for k_idx in 0..k - 1 {
-                    for j_idx in 0..j - 1 {
-                        let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                        let idx10 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
-                        let idx01 = Self::linear_index(i_idx, j_idx, k_idx + 1, i, j);
-                        let idx11 = Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j);
-
-                        indices.push(idx00 as u32);
-                        indices.push(idx10 as u32);
-                        indices.push(idx01 as u32);
-
-                        indices.push(idx10 as u32);
-                        indices.push(idx11 as u32);
-                        indices.push(idx01 as u32);
-                    }
-                }
-            }
-        }
+        // No I-K or J-K planes needed for k=1 surface only
 
         // Compute vertex normals
         let mut normals = vec![0.0f32; total_points * 3];
@@ -1016,7 +973,8 @@ fn read_xyz_coords_with_markers<R: Read>(
 
     let total_values_f32 = record_size as usize / 4;
     let total_values_f64 = record_size as usize / 8;
-
+    
+    // XYZ only (f32)
     if total_values_f32 == count * 3 {
         let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
         let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
@@ -1034,7 +992,9 @@ fn read_xyz_coords_with_markers<R: Read>(
         }
 
         Ok((x_coords, y_coords, z_coords, Precision::F32))
-    } else if total_values_f64 == count * 3 {
+    } 
+    // XYZ only (f64)
+    else if total_values_f64 == count * 3 {
         let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
         let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
         let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
@@ -1051,7 +1011,55 @@ fn read_xyz_coords_with_markers<R: Read>(
         }
 
         Ok((x_coords, y_coords, z_coords, Precision::F64))
-    } else {
+    }
+    // XYZ (f32) + IBLANK (i32): count * 3 * 4 + count * 4 = count * 16
+    else if record_size as usize == count * 16 {
+        let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        
+        // Skip IBLANK data (will be read separately if needed)
+        let mut iblank_data = vec![0u8; count * 4];
+        reader.read_exact(&mut iblank_data)?;
+
+        let closing_marker = read_record_marker(reader, byte_order)?;
+        if closing_marker != record_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Record marker mismatch: {} != {}",
+                    record_size, closing_marker
+                ),
+            ));
+        }
+
+        Ok((x_coords, y_coords, z_coords, Precision::F32))
+    }
+    // XYZ (f64) + IBLANK (i32): count * 3 * 8 + count * 4 = count * 28
+    else if record_size as usize == count * 28 {
+        let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        
+        // Skip IBLANK data (will be read separately if needed)
+        let mut iblank_data = vec![0u8; count * 4];
+        reader.read_exact(&mut iblank_data)?;
+
+        let closing_marker = read_record_marker(reader, byte_order)?;
+        if closing_marker != record_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Record marker mismatch: {} != {}",
+                    record_size, closing_marker
+                ),
+            ));
+        }
+
+        Ok((x_coords, y_coords, z_coords, Precision::F64))
+    }
+    // Separate XYZ records - check if record_size matches expected size for one coordinate array
+    else {
         let precision = match record_size as usize {
             size if size == count * 4 => Precision::F32,
             size if size == count * 8 => Precision::F64,
@@ -1059,8 +1067,12 @@ fn read_xyz_coords_with_markers<R: Read>(
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
-                        "Unexpected precision: {} bytes per value",
-                        record_size as usize / count
+                        "Invalid record size: expected {} (f32), {} (f64), {} (f32+IBLANK), or {} (f64+IBLANK) bytes, got {} bytes",
+                        count * 12,  // XYZ f32
+                        count * 24,  // XYZ f64
+                        count * 16,  // XYZ f32 + IBLANK i32
+                        count * 28,  // XYZ f64 + IBLANK i32
+                        record_size
                     ),
                 ));
             }

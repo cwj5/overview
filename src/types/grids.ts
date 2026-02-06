@@ -1,4 +1,4 @@
-import type { Plot3DGrid } from "./plot3d";
+import type { Plot3DGrid, Plot3DSolution } from "./plot3d";
 
 export interface GridItem {
     id: string;
@@ -8,6 +8,7 @@ export interface GridItem {
     gridIndex: number;
     color: string;
     visible: boolean;
+    solution?: Plot3DSolution; // Optional solution data for this grid
 }
 
 export interface GridFileGroup {

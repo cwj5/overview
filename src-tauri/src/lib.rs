@@ -44,7 +44,7 @@ fn load_plot3d_file(path: String) -> Result<Vec<Plot3DGrid>, String> {
                 .grid_dimensions
                 .iter()
                 .enumerate()
-                .map(|(idx, d)| format!("Grid {} ({}×{}×{})", idx, d.i, d.j, d.k))
+                .map(|(idx, d)| format!("Grid {} ({}×{}×{})", idx + 1, d.i, d.j, d.k))
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -218,11 +218,6 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
     let file_path = app
         .dialog()
         .file()
-        .add_filter("PLOT3D Grid Files", &["grid", "xyz"])
-        .add_filter("PLOT3D Solution Files", &["q"])
-        .add_filter("PLOT3D Function Files", &["f"])
-        .add_filter("PLOT3D Files", &["grid", "xyz", "q", "f", "dat", "in"])
-        .add_filter("All Files", &["*"])
         .blocking_pick_file();
 
     Ok(file_path.map(|f| f.to_string()))
@@ -233,11 +228,6 @@ async fn open_multiple_files_dialog(app: tauri::AppHandle) -> Result<Vec<String>
     let file_paths = app
         .dialog()
         .file()
-        .add_filter("PLOT3D Grid Files", &["grid", "xyz"])
-        .add_filter("PLOT3D Solution Files", &["q"])
-        .add_filter("PLOT3D Function Files", &["f"])
-        .add_filter("PLOT3D Files", &["grid", "xyz", "q", "f", "dat", "in"])
-        .add_filter("All Files", &["*"])
         .blocking_pick_files();
 
     Ok(file_paths

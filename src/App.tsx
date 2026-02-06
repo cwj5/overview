@@ -19,7 +19,7 @@ import Viewer3D from "./components/Viewer3D";
 import { LogViewer } from "./components/LogViewer";
 import { logger } from "./utils/logger";
 import { groupGridsByFile } from "./utils/gridUtils";
-import type { Plot3DGrid } from "./types/plot3d";
+import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
 import type { GridItem } from "./types/grids";
 import "./App.css";
 
@@ -65,6 +65,7 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [selectedGridId, setSelectedGridId] = useState<string | null>(null);
   const [isolateSelected, setIsolateSelected] = useState(false);
+  const [hasSolution, setHasSolution] = useState(false);
 
   useEffect(() => {
     const setupMenu = async () => {
@@ -103,75 +104,50 @@ function App() {
     [grids, selectedGridId]
   );
 
-  async function loadFile() {
+  async function loadFiles() {
     try {
       setLoading(true);
       setError("");
-      logger.info("Opening file dialog...");
+      logger.info("Opening file selection dialog...");
 
-      // Open file dialog
-      const filePath = await invoke<string | null>("open_file_dialog");
-
-      if (!filePath) {
-        setLoading(false);
-        logger.debug("File dialog cancelled");
-        return; // User cancelled
-      }
-
-      logger.info(`Loading file: ${filePath}`);
-
-      // Load the PLOT3D file
-      const data = await invoke<Plot3DGrid[]>("load_plot3d_file", { path: filePath });
-      const fileName = filePath.split(/[/\\]/).pop() || filePath;
-
-      const gridItems = buildGridItems(data, filePath, fileName, 0);
-      setGrids(gridItems);
-      setSelectedGridId(gridItems[0]?.id ?? null);
-      setIsolateSelected(false);
-      logger.info(`Successfully loaded ${gridItems.length} grid(s)`);
-
-      // Extract metadata
-      const metadata: FileMetadata = {
-        fileNames: [fileName],
-        gridCount: gridItems.length,
-      };
-
-      setFileMetadata(metadata);
-      logger.info(`File metadata: ${metadata.gridCount} grid(s)`);
-    } catch (e) {
-      const errorMsg = String(e);
-      setError(errorMsg);
-      logger.error(errorMsg);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadMultipleFiles() {
-    try {
-      setLoading(true);
-      setError("");
-      logger.info("Opening multiple files dialog...");
-
-      // Open file dialog for multiple files
+      // Open file dialog for selecting one or more files
       const filePaths = await invoke<string[]>("open_multiple_files_dialog");
 
       if (!filePaths || filePaths.length === 0) {
         setLoading(false);
-        logger.debug("Multiple files dialog cancelled");
-        return; // User cancelled or no files selected
+        logger.debug("File dialog cancelled");
+        return;
       }
 
       logger.info(`Loading ${filePaths.length} file(s)...`);
 
+      // Try to load each file as a grid, collect successful grids
+      const gridResults: { path: string; grids: Plot3DGrid[]; fileName: string }[] = [];
+      const potentialSolutionPaths: string[] = [];
+
+      for (const path of filePaths) {
+        try {
+          const grids = await invoke<Plot3DGrid[]>("load_plot3d_file", { path });
+          const fileName = path.split(/[/\\]/).pop() || path;
+          gridResults.push({ path, grids, fileName });
+          logger.info(`Loaded ${grids.length} grid(s) from ${fileName}`);
+        } catch (e) {
+          // If it fails as a grid, it might be a solution file
+          potentialSolutionPaths.push(path);
+          logger.debug(`${path} is not a grid file, will try as solution`);
+        }
+      }
+
+      if (gridResults.length === 0) {
+        throw new Error("No valid grid files found in selection");
+      }
+
+      // Build grid items from all loaded grids
       const allGrids: GridItem[] = [];
       let colorOffset = 0;
 
-      for (const path of filePaths) {
-        const data = await invoke<Plot3DGrid[]>("load_plot3d_file", { path });
-        const fileName = path.split(/[/\\]/).pop() || path;
-
-        const gridItems = buildGridItems(data, path, fileName, colorOffset);
+      for (const { path, grids, fileName } of gridResults) {
+        const gridItems = buildGridItems(grids, path, fileName, colorOffset);
         allGrids.push(...gridItems);
         colorOffset += gridItems.length;
       }
@@ -179,15 +155,76 @@ function App() {
       setGrids(allGrids);
       setSelectedGridId(allGrids[0]?.id ?? null);
       setIsolateSelected(false);
-      logger.info(`Successfully loaded ${allGrids.length} grid(s) from ${filePaths.length} file(s)`);
+      setHasSolution(false);
+
+      // Try to load solution files
+      if (potentialSolutionPaths.length > 0) {
+        for (const solPath of potentialSolutionPaths) {
+          try {
+            let solutions: Plot3DSolution[];
+            try {
+              solutions = await invoke<Plot3DSolution[]>("load_plot3d_solution", { path: solPath });
+            } catch {
+              solutions = await invoke<Plot3DSolution[]>("load_plot3d_solution_ascii", { path: solPath });
+            }
+
+            // Validate solution matches grids
+            if (solutions.length !== allGrids.length) {
+              throw new Error(
+                `Solution file has ${solutions.length} grid(s) but grid file has ${allGrids.length} grid(s). They must match.`
+              );
+            }
+
+            // Validate dimensions for each grid
+            for (let i = 0; i < solutions.length; i++) {
+              const solution = solutions[i];
+              const gridItem = allGrids.find((g) => g.gridIndex === solution.grid_index);
+              
+              if (!gridItem) {
+                throw new Error(`Solution grid ${solution.grid_index + 1} not found in loaded grids`);
+              }
+
+              const grid = gridItem.grid;
+              if (
+                solution.dimensions.i !== grid.dimensions.i ||
+                solution.dimensions.j !== grid.dimensions.j ||
+                solution.dimensions.k !== grid.dimensions.k
+              ) {
+                throw new Error(
+                  `Grid ${solution.grid_index + 1} dimensions mismatch: solution has ${solution.dimensions.i}x${solution.dimensions.j}x${solution.dimensions.k} but grid has ${grid.dimensions.i}x${grid.dimensions.j}x${grid.dimensions.k}`
+                );
+              }
+            }
+
+            // Match solutions to grids
+            setGrids((prevGrids) =>
+              prevGrids.map((gridItem) => {
+                const solution = solutions.find((sol) => sol.grid_index === gridItem.gridIndex);
+                if (solution) {
+                  logger.info(`Attached solution to grid ${gridItem.gridIndex + 1}`);
+                  return { ...gridItem, solution };
+                }
+                return gridItem;
+              })
+            );
+
+            setHasSolution(true);
+            logger.info(`Successfully loaded ${solutions.length} solution(s) from ${solPath.split(/[/\\]/).pop()}`);
+          } catch (e) {
+            const errorMsg = String(e).replace(/^Error:\s*/, '');
+            logger.error(errorMsg);
+            throw new Error(errorMsg);
+          }
+        }
+      }
 
       const metadata: FileMetadata = {
-        fileNames: filePaths.map((path) => path.split(/[/\\]/).pop() || path),
+        fileNames: gridResults.map(r => r.fileName),
         gridCount: allGrids.length,
       };
 
       setFileMetadata(metadata);
-      logger.info(`File metadata: ${metadata.gridCount} grid(s)`);
+      logger.info(`Loaded ${metadata.gridCount} total grid(s) from ${gridResults.length} file(s)`);
     } catch (e) {
       const errorMsg = String(e);
       setError(errorMsg);
@@ -214,7 +251,7 @@ function App() {
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
-            onClick={loadFile}
+            onClick={loadFiles}
             disabled={loading}
             style={{
               padding: '8px 16px',
@@ -226,23 +263,22 @@ function App() {
               opacity: loading ? 0.7 : 1
             }}
           >
-            {loading ? 'Loading...' : 'Open File'}
+            {loading ? 'Loading...' : 'Load Files'}
           </button>
-          <button
-            onClick={loadMultipleFiles}
-            disabled={loading}
-            style={{
-              padding: '8px 16px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              background: '#8b5cf6',
-              border: 'none',
+          {hasSolution && (
+            <span style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px',
+              padding: '8px 12px',
+              background: '#10b981',
               borderRadius: '4px',
               color: 'white',
-              opacity: loading ? 0.7 : 1
-            }}
-          >
-            Open Multiple Files
-          </button>
+              fontSize: '13px'
+            }}>
+              ✓ Solution loaded
+            </span>
+          )}
         </div>
         {error && <span style={{ color: '#ef4444', fontSize: '14px' }}>{error}</span>}
         {fileMetadata && (
@@ -396,6 +432,9 @@ function App() {
                                   }}
                                 />
                                 Grid {grid.gridIndex + 1}
+                                {grid.solution && (
+                                  <span style={{ fontSize: '10px', color: '#10b981' }}>●</span>
+                                )}
                               </span>
                             </button>
                           </div>
@@ -415,6 +454,11 @@ function App() {
                 <div style={{ color: '#cbd5f5' }}>
                   Dimensions: {selectedGrid.grid.dimensions.i}x{selectedGrid.grid.dimensions.j}x{selectedGrid.grid.dimensions.k}
                 </div>
+                {selectedGrid.solution && (
+                  <div style={{ color: '#10b981', marginTop: '4px', fontSize: '11px' }}>
+                    ✓ Solution data loaded
+                  </div>
+                )}
               </div>
             )}
           </aside>
