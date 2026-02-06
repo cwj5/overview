@@ -1,7 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
+
+// Thread-local storage for last loaded solution file metadata
+thread_local! {
+    static LAST_SOLUTION_METADATA: RefCell<Option<SolutionFileMetadata>> = RefCell::new(None);
+}
 
 /// Represents a PLOT3D grid structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +29,14 @@ pub struct GridFileMetadata {
     pub has_iblank: bool,
     pub num_grids: usize,
     pub grid_dimensions: Vec<GridDimensions>,
+}
+
+/// File metadata about the loaded solution file
+#[derive(Debug, Clone)]
+pub struct SolutionFileMetadata {
+    pub format: String,     // "binary" or "ASCII"
+    pub precision: String,  // "f32" or "f64"
+    pub byte_order: String, // "Little-Endian" or "Big-Endian" (ASCII uses "N/A")
 }
 
 /// PLOT3D solution metadata from Q file header
@@ -785,13 +799,22 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
 
     let mut solutions = Vec::with_capacity(num_grids as usize);
 
+    // Track the first precision detected (should be same for whole file)
+    let mut detected_precision: Option<Precision> = None;
+
     // Read solution data for each grid
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        // Read metadata record and parse it
-        // REFMACH, ALPHA, REY, TIME, GAMINF, BETA, TINF, IGAM, HTINF, HT1, HT2, RGAS[...], FSMACH, TVREF, DTVREF
+        // FIRST: Detect precision from Q array record size before reading metadata
+        // Peek at the Q array record marker to determine f32 vs f64
+        // We need to know this before reading data, so read metadata and Q positions first
+
+        // Record sequence: metadata record marker, metadata, closing marker, Q record marker, ...
+        // Read metadata record opening marker
         let metadata_record_size = read_record_marker(&mut reader, byte_order)? as usize;
+
+        // Read and store metadata buffer
         let mut metadata_buf = vec![0u8; metadata_record_size];
         reader.read_exact(&mut metadata_buf).map_err(|e| {
             io::Error::new(
@@ -801,17 +824,53 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
         })?;
         skip_record_marker(&mut reader)?;
 
+        // Now read the Q array record marker to detect precision BEFORE reading Q data
+        let q_record_size = read_record_marker(&mut reader, byte_order)? as usize;
+
+        // Determine precision based on Q record size
+        // NQ variables * total_points values per variable
+        let expected_f32_size = nq * total_points * 4; // f32 = 4 bytes
+        let expected_f64_size = nq * total_points * 8; // f64 = 8 bytes
+
+        let precision = if q_record_size == expected_f32_size {
+            Precision::F32
+        } else if q_record_size == expected_f64_size {
+            Precision::F64
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Invalid Q record size: expected {} bytes (f32) or {} bytes (f64), got {} bytes",
+                    expected_f32_size, expected_f64_size, q_record_size
+                ),
+            ));
+        };
+
+        // Track the first precision detected
+        if detected_precision.is_none() {
+            detected_precision = Some(precision);
+        }
+
         // Parse metadata - will read as many fields as are available
         let metadata = parse_metadata(&metadata_buf, byte_order);
 
-        // Read Q array: ALL solution data in ONE record
-        // Format: rho[all points], rhou[all points], rhov[all points], rhow[all points], rhoe[all points], ...
-        skip_record_marker(&mut reader)?;
-
-        // We expect NQ variables, each with total_points values
+        // Now read Q data with the detected precision
         let mut q_data = vec![Vec::with_capacity(total_points); nq];
         for n in 0..nq {
-            q_data[n] = read_f32_array(&mut reader, total_points, byte_order)?;
+            q_data[n] = match precision {
+                Precision::F32 => read_f32_array(&mut reader, total_points, byte_order)?,
+                Precision::F64 => {
+                    // Read f64 and convert to f32 for storage (lossy but preserves values)
+                    let f64_data = read_f64_array(&mut reader, total_points, byte_order)?;
+                    f64_data.iter().map(|&v| v as f32).collect()
+                }
+                Precision::Mixed => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Mixed precision not supported for solution data",
+                    ));
+                }
+            };
         }
 
         skip_record_marker(&mut reader)?;
@@ -853,6 +912,18 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
             metadata: Some(metadata),
         });
     }
+
+    // Set metadata for logging in the command handler
+    let byte_order_str = match byte_order {
+        ByteOrder::LittleEndian => "Little-Endian",
+        ByteOrder::BigEndian => "Big-Endian",
+    };
+    let precision_str = detected_precision.unwrap_or(Precision::F32).as_str();
+    set_last_solution_metadata(SolutionFileMetadata {
+        format: "binary".to_string(),
+        precision: precision_str.to_string(),
+        byte_order: byte_order_str.to_string(),
+    });
 
     Ok(solutions)
 }
@@ -1046,6 +1117,13 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
         });
     }
 
+    // Set metadata for logging in the command handler
+    set_last_solution_metadata(SolutionFileMetadata {
+        format: "ASCII".to_string(),
+        precision: "f32".to_string(),
+        byte_order: "N/A".to_string(),
+    });
+
     Ok(solutions)
 }
 
@@ -1187,6 +1265,24 @@ fn read_f32_array<R: Read>(
         let value = match byte_order {
             ByteOrder::LittleEndian => f32::from_le_bytes(buf),
             ByteOrder::BigEndian => f32::from_be_bytes(buf),
+        };
+        result.push(value);
+    }
+    Ok(result)
+}
+
+fn read_f64_array<R: Read>(
+    reader: &mut R,
+    count: usize,
+    byte_order: ByteOrder,
+) -> io::Result<Vec<f64>> {
+    let mut result = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?;
+        let value = match byte_order {
+            ByteOrder::LittleEndian => f64::from_le_bytes(buf),
+            ByteOrder::BigEndian => f64::from_be_bytes(buf),
         };
         result.push(value);
     }
@@ -1465,6 +1561,16 @@ fn try_read_iblank_array<R: BufRead>(
     }
 
     Ok(Some(iblank))
+}
+
+/// Get the metadata from the last loaded solution file
+pub fn get_last_solution_metadata() -> Option<SolutionFileMetadata> {
+    LAST_SOLUTION_METADATA.with(|m| m.borrow().clone())
+}
+
+/// Set the metadata for the last loaded solution file (internal use)
+fn set_last_solution_metadata(metadata: SolutionFileMetadata) {
+    LAST_SOLUTION_METADATA.with(|m| *m.borrow_mut() = Some(metadata));
 }
 
 #[cfg(test)]
@@ -2367,5 +2473,148 @@ mod tests {
         assert_eq!(Precision::F32.as_str(), "f32");
         assert_eq!(Precision::F64.as_str(), "f64");
         assert_eq!(Precision::Mixed.as_str(), "mixed");
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_binary_f32_precision() -> io::Result<()> {
+        // Create a binary PLOT3D solution file with f32 precision
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: dimensions + NQ + NQC (5 integers = 20 bytes)
+        temp_file.write_all(&20i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // j = 1
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&5i32.to_le_bytes())?; // NQ = 5 (no gamma)
+        temp_file.write_all(&0i32.to_le_bytes())?; // NQC = 0
+        temp_file.write_all(&20i32.to_le_bytes())?;
+
+        // Record 3: Metadata record (small)
+        temp_file.write_all(&64i32.to_le_bytes())?;
+        for _ in 0..16 {
+            temp_file.write_all(&0.0f32.to_le_bytes())?;
+        }
+        temp_file.write_all(&64i32.to_le_bytes())?;
+
+        // Record 4: Q data (5 variables * 2 points * 4 bytes = 40 bytes for f32)
+        temp_file.write_all(&40i32.to_le_bytes())?;
+        for i in 0..10 {
+            temp_file.write_all(&(i as f32).to_le_bytes())?;
+        }
+        temp_file.write_all(&40i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read f32 solution: {:?}",
+            result.err()
+        );
+
+        // Check that metadata was set correctly
+        let metadata = get_last_solution_metadata();
+        assert!(metadata.is_some(), "Solution metadata should be set");
+        let meta = metadata.unwrap();
+        assert_eq!(meta.format, "binary");
+        assert_eq!(meta.precision, "f32");
+        assert_eq!(meta.byte_order, "Little-Endian");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_binary_f64_precision() -> io::Result<()> {
+        // Create a binary PLOT3D solution file with f64 precision (double)
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: dimensions + NQ + NQC (5 integers = 20 bytes)
+        temp_file.write_all(&20i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // j = 1
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&5i32.to_le_bytes())?; // NQ = 5
+        temp_file.write_all(&0i32.to_le_bytes())?; // NQC = 0
+        temp_file.write_all(&20i32.to_le_bytes())?;
+
+        // Record 3: Metadata record (small)
+        temp_file.write_all(&64i32.to_le_bytes())?;
+        for _ in 0..16 {
+            temp_file.write_all(&0.0f32.to_le_bytes())?;
+        }
+        temp_file.write_all(&64i32.to_le_bytes())?;
+
+        // Record 4: Q data (5 variables * 2 points * 8 bytes = 80 bytes for f64)
+        temp_file.write_all(&80i32.to_le_bytes())?;
+        for i in 0..10 {
+            temp_file.write_all(&(i as f64).to_le_bytes())?;
+        }
+        temp_file.write_all(&80i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read f64 solution: {:?}",
+            result.err()
+        );
+
+        // Check that metadata was set correctly
+        let metadata = get_last_solution_metadata();
+        assert!(metadata.is_some(), "Solution metadata should be set");
+        let meta = metadata.unwrap();
+        assert_eq!(meta.format, "binary");
+        assert_eq!(meta.precision, "f64");
+        assert_eq!(meta.byte_order, "Little-Endian");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_ascii_metadata() -> io::Result<()> {
+        // Create ASCII solution file
+        let mut temp_file = NamedTempFile::new()?;
+        temp_file.write_all(b"1\n")?; // num_grids
+        temp_file.write_all(b"2 1 1\n")?; // i j k
+        temp_file.write_all(b"5 0\n")?; // NQ NQC
+
+        // Metadata line (5 floats)
+        temp_file.write_all(b"0.0 0.0 0.0 0.0 0.0\n")?;
+
+        // Q data (5 variables * 2 points = 10 values)
+        for i in 0..10 {
+            temp_file.write_all(format!("{}.0 ", i).as_bytes())?;
+        }
+        temp_file.write_all(b"\n")?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution_ascii(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read ASCII solution: {:?}",
+            result.err()
+        );
+
+        // Check that metadata was set correctly
+        let metadata = get_last_solution_metadata();
+        assert!(metadata.is_some(), "Solution metadata should be set");
+        let meta = metadata.unwrap();
+        assert_eq!(meta.format, "ASCII");
+        assert_eq!(meta.precision, "f32");
+        assert_eq!(meta.byte_order, "N/A");
+
+        Ok(())
     }
 }

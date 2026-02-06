@@ -48,7 +48,7 @@ pub fn clear_logs() {
 /// Add a log entry
 pub fn log_entry(level: &str, message: &str, module: Option<String>) {
     let entry = LogEntry {
-        timestamp: chrono::Local::now().format("%m-%d | %H:%M:%S").to_string(),
+        timestamp: chrono::Local::now().format("%m-%d | %H:%M:%S%.3f").to_string(),
         level: level.to_string(),
         message: message.to_string(),
         module,

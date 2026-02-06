@@ -21,14 +21,20 @@ mod logger_tests;
 
 use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, LogEntry};
 use plot3d::{
-    read_plot3d_function, read_plot3d_grid_ascii, read_plot3d_grid_with_metadata,
-    read_plot3d_solution, read_plot3d_solution_ascii, MeshGeometry, Plot3DFunction, Plot3DGrid,
-    Plot3DSolution,
+    get_last_solution_metadata, read_plot3d_function, read_plot3d_grid_ascii,
+    read_plot3d_grid_with_metadata, read_plot3d_solution, read_plot3d_solution_ascii, MeshGeometry,
+    Plot3DFunction, Plot3DGrid, Plot3DSolution, SolutionFileMetadata,
 };
+use std::cell::RefCell;
 use std::path::Path;
 use tauri::webview::WebviewWindow;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+
+// Thread-local storage for solution file metadata
+thread_local! {
+    static SOLUTION_METADATA: RefCell<Option<SolutionFileMetadata>> = RefCell::new(None);
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -106,11 +112,19 @@ fn load_plot3d_solution(path: String) -> Result<Vec<Plot3DSolution>, String> {
     log_debug(&format!("Loading PLOT3D solution file: {}", path));
     match read_plot3d_solution(&path) {
         Ok(solutions) => {
-            log_info(&format!(
-                "Successfully loaded {} solution(s) from {}",
-                solutions.len(),
-                path
-            ));
+            // Get the metadata that was set by the reader
+            if let Some(metadata) = get_last_solution_metadata() {
+                log_info(&format!(
+                    "Loaded solution file {} ({} format, {} precision, endianness: {})",
+                    path, metadata.format, metadata.precision, metadata.byte_order
+                ));
+            } else {
+                log_info(&format!(
+                    "Successfully loaded {} solution(s) from {} (binary format)",
+                    solutions.len(),
+                    path
+                ));
+            }
             Ok(solutions)
         }
         Err(e) => {
@@ -127,17 +141,117 @@ fn load_plot3d_solution_ascii(path: String) -> Result<Vec<Plot3DSolution>, Strin
     log_debug(&format!("Loading ASCII PLOT3D solution file: {}", path));
     match read_plot3d_solution_ascii(&path) {
         Ok(solutions) => {
-            log_info(&format!(
-                "Successfully loaded {} ASCII solution(s) from {}",
-                solutions.len(),
-                path
-            ));
+            // Get the metadata that was set by the reader
+            if let Some(metadata) = get_last_solution_metadata() {
+                log_info(&format!(
+                    "Loaded solution file {} ({} format, {} precision)",
+                    path, metadata.format, metadata.precision
+                ));
+            } else {
+                log_info(&format!(
+                    "Successfully loaded {} solution(s) from {} (ASCII format)",
+                    solutions.len(),
+                    path
+                ));
+            }
             Ok(solutions)
         }
         Err(e) => {
             let error_msg = format!("Error loading ASCII PLOT3D solution file: {}", e);
             log_error(&error_msg);
             Err(error_msg)
+        }
+    }
+}
+
+/// Load PLOT3D solution file (Q file) - auto-detects binary or ASCII format
+#[tauri::command]
+fn load_plot3d_solution_auto(path: String) -> Result<Vec<Plot3DSolution>, String> {
+    log_debug(&format!(
+        "Loading PLOT3D solution file (auto-detect): {}",
+        path
+    ));
+
+    // First, check file size and basic properties
+    use std::fs;
+    let metadata = fs::metadata(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    log_debug(&format!("File size: {} bytes", metadata.len()));
+
+    if metadata.len() == 0 {
+        return Err("Solution file is empty".to_string());
+    }
+
+    // Try to detect file type by reading first few bytes
+    let file_bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let is_likely_text = file_bytes
+        .iter()
+        .take(500)
+        .all(|&b| b == b'\n' || b == b'\r' || b == b'\t' || (b >= 32 && b < 127));
+
+    log_debug(&format!(
+        "File appears to be: {}",
+        if is_likely_text {
+            "text (ASCII)"
+        } else {
+            "binary"
+        }
+    ));
+
+    // Try binary format first (more specific format)
+    match read_plot3d_solution(&path) {
+        Ok(solutions) => {
+            // Get the metadata that was set by the reader
+            if let Some(metadata) = get_last_solution_metadata() {
+                log_info(&format!(
+                    "Loaded solution file {} ({} format, {} precision, endianness: {})",
+                    path, metadata.format, metadata.precision, metadata.byte_order
+                ));
+            } else {
+                log_info(&format!(
+                    "Successfully loaded {} solution(s) from {} (binary format)",
+                    solutions.len(),
+                    path
+                ));
+            }
+            Ok(solutions)
+        }
+        Err(binary_err) => {
+            // Binary failed, try ASCII format
+            log_debug(&format!("Binary format failed: {}", binary_err));
+            match read_plot3d_solution_ascii(&path) {
+                Ok(solutions) => {
+                    // Get the metadata that was set by the reader
+                    if let Some(metadata) = get_last_solution_metadata() {
+                        log_info(&format!(
+                            "Loaded solution file {} ({} format, {} precision)",
+                            path, metadata.format, metadata.precision
+                        ));
+                    } else {
+                        log_info(&format!(
+                            "Successfully loaded {} solution(s) from {} (ASCII format)",
+                            solutions.len(),
+                            path
+                        ));
+                    }
+                    Ok(solutions)
+                }
+                Err(ascii_err) => {
+                    log_debug(&format!("ASCII format failed: {}", ascii_err));
+                    let file_type = if is_likely_text {
+                        "text file"
+                    } else {
+                        "binary file"
+                    };
+                    let error_msg = format!(
+                        "Failed to load solution file (detected as {}). Binary reader: {}. ASCII reader: {}",
+                        file_type, binary_err, ascii_err
+                    );
+                    log_error(&error_msg);
+                    Err(error_msg)
+                }
+            }
         }
     }
 }
@@ -386,6 +500,7 @@ pub fn run() {
             load_plot3d_file_ascii,
             load_plot3d_solution,
             load_plot3d_solution_ascii,
+            load_plot3d_solution_auto,
             load_plot3d_function,
             convert_grid_to_mesh,
             compute_solution_colors,

@@ -55,7 +55,8 @@ class Logger {
         const hour = String(now.getHours()).padStart(2, "0");
         const minute = String(now.getMinutes()).padStart(2, "0");
         const second = String(now.getSeconds()).padStart(2, "0");
-        const timestamp = `${month}-${day} | ${hour}:${minute}:${second}`;
+        const millisecond = String(now.getMilliseconds()).padStart(3, "0");
+        const timestamp = `${month}-${day} | ${hour}:${minute}:${second}.${millisecond}`;
 
         const entry: LogEntry = {
             timestamp,

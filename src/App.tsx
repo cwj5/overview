@@ -164,12 +164,8 @@ function App() {
       if (potentialSolutionPaths.length > 0) {
         for (const solPath of potentialSolutionPaths) {
           try {
-            let solutions: Plot3DSolution[];
-            try {
-              solutions = await invoke<Plot3DSolution[]>("load_plot3d_solution", { path: solPath });
-            } catch {
-              solutions = await invoke<Plot3DSolution[]>("load_plot3d_solution_ascii", { path: solPath });
-            }
+            // Auto-detect binary or ASCII format and load accordingly
+            const solutions = await invoke<Plot3DSolution[]>("load_plot3d_solution_auto", { path: solPath });
 
             // Validate solution matches grids
             if (solutions.length !== allGrids.length) {
@@ -204,7 +200,6 @@ function App() {
               prevGrids.map((gridItem) => {
                 const solution = solutions.find((sol) => sol.grid_index === gridItem.gridIndex);
                 if (solution) {
-                  logger.info(`Attached solution to grid ${gridItem.gridIndex + 1}`);
                   return { ...gridItem, solution };
                 }
                 return gridItem;
