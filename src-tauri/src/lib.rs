@@ -14,6 +14,7 @@
 
 mod logger;
 mod plot3d;
+mod solution;
 
 #[cfg(test)]
 mod logger_tests;
@@ -203,22 +204,58 @@ fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
     Ok(mesh)
 }
 
+/// Compute scalar field colors for a grid with solution data
+#[tauri::command]
+fn compute_solution_colors(
+    grid: Plot3DGrid,
+    solution: Plot3DSolution,
+    field: String,
+) -> Result<MeshGeometry, String> {
+    use solution::{compute_colors, compute_scalar_field, ScalarField};
+
+    // Parse field type
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+
+    // Validate solution matches grid
+    let grid_points = grid.total_points();
+    if solution.rho.len() != grid_points {
+        return Err(format!(
+            "Solution points {} != grid points {}",
+            solution.rho.len(),
+            grid_points
+        ));
+    }
+
+    // Compute the scalar field values
+    let values = compute_scalar_field(&solution, field_enum);
+
+    // Generate colors from scalar values
+    let colors = compute_colors(&values);
+
+    // Create mesh geometry
+    let mut mesh = grid.to_mesh_geometry();
+    mesh.colors = Some(colors);
+
+    log_info(&format!(
+        "Computed {} colors for {} vertices",
+        mesh.colors.as_ref().unwrap_or(&Vec::new()).len() / 3,
+        grid_points
+    ));
+
+    Ok(mesh)
+}
+
 #[tauri::command]
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let file_path = app
-        .dialog()
-        .file()
-        .blocking_pick_file();
+    let file_path = app.dialog().file().blocking_pick_file();
 
     Ok(file_path.map(|f| f.to_string()))
 }
 
 #[tauri::command]
 async fn open_multiple_files_dialog(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let file_paths = app
-        .dialog()
-        .file()
-        .blocking_pick_files();
+    let file_paths = app.dialog().file().blocking_pick_files();
 
     Ok(file_paths
         .map(|files| files.iter().map(|f| f.to_string()).collect())
@@ -351,6 +388,7 @@ pub fn run() {
             load_plot3d_solution_ascii,
             load_plot3d_function,
             convert_grid_to_mesh,
+            compute_solution_colors,
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,

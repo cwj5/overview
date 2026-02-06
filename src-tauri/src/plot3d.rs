@@ -30,11 +30,13 @@ pub struct GridFileMetadata {
 pub struct Plot3DSolution {
     pub grid_index: usize,
     pub dimensions: GridDimensions,
-    pub rho: Vec<f32>,  // Density
-    pub rhou: Vec<f32>, // Momentum X
-    pub rhov: Vec<f32>, // Momentum Y
-    pub rhow: Vec<f32>, // Momentum Z
-    pub rhoe: Vec<f32>, // Energy
+    pub rho: Vec<f32>,  // Density (non-dimensional)
+    pub rhou: Vec<f32>, // Momentum X (non-dimensional)
+    pub rhov: Vec<f32>, // Momentum Y (non-dimensional)
+    pub rhow: Vec<f32>, // Momentum Z (non-dimensional)
+    pub rhoe: Vec<f32>, // Total Energy (non-dimensional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gamma: Option<Vec<f32>>, // Ratio of specific heats (always at Q[5], NQ=6+NQC+NQT)
 }
 
 /// PLOT3D function file data
@@ -61,6 +63,8 @@ pub struct MeshGeometry {
     pub normals: Vec<f32>,  // Computed vertex normals
     pub vertex_count: usize,
     pub face_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Vec<f32>>, // Optional vertex colors (r, g, b interleaved)
 }
 
 /// Byte order detection
@@ -192,6 +196,7 @@ impl Plot3DGrid {
             normals,
             vertex_count: total_points,
             face_count,
+            colors: None,
         }
     }
 
@@ -632,12 +637,8 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
     let num_grids = read_i32(&mut reader, byte_order)?;
     skip_record_marker(&mut reader)?;
 
-    let mut solutions = Vec::with_capacity(num_grids as usize);
-
-    // Skip opening record marker for dimensions
+    // Read dimensions and NQ, NQC from a single record
     skip_record_marker(&mut reader)?;
-
-    // Read dimensions for all grids
     let mut dimensions_list = Vec::with_capacity(num_grids as usize);
     for _ in 0..num_grids {
         let i = read_i32(&mut reader, byte_order)? as u32;
@@ -654,33 +655,72 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
         dimensions_list.push(GridDimensions { i, j, k });
     }
 
-    // Skip closing record marker for dimensions
+    // Read NQ (number of solution variables) and NQC (number of conservative variables)
+    let nq = read_i32(&mut reader, byte_order)? as usize;
+    let _nqc = read_i32(&mut reader, byte_order)? as usize;
     skip_record_marker(&mut reader)?;
 
-    // Read solution data for each grid (5 variables: rho, rhou, rhov, rhow, rhoe)
+    if nq < 5 || nq > 100 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid NQ: {}", nq),
+        ));
+    }
+
+    let mut solutions = Vec::with_capacity(num_grids as usize);
+
+    // Read solution data for each grid
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        // Read each variable array with its record markers
-        skip_record_marker(&mut reader)?;
-        let rho = read_f32_array(&mut reader, total_points, byte_order)?;
-        skip_record_marker(&mut reader)?;
-
-        skip_record_marker(&mut reader)?;
-        let rhou = read_f32_array(&mut reader, total_points, byte_order)?;
-        skip_record_marker(&mut reader)?;
-
-        skip_record_marker(&mut reader)?;
-        let rhov = read_f32_array(&mut reader, total_points, byte_order)?;
-        skip_record_marker(&mut reader)?;
-
-        skip_record_marker(&mut reader)?;
-        let rhow = read_f32_array(&mut reader, total_points, byte_order)?;
+        // Read metadata record (skip it - we don't need these parameters)
+        // REFMACH, ALPHA, REY, TIME, GAMINF, BETA, TINF, IGAM, HTINF, HT1, HT2, RGAS[...], FSMACH, TVREF, DTVREF
+        let metadata_record_size = read_record_marker(&mut reader, byte_order)? as usize;
+        let mut skip_buf = vec![0u8; metadata_record_size];
+        reader.read_exact(&mut skip_buf).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to skip metadata record: {}", e),
+            )
+        })?;
         skip_record_marker(&mut reader)?;
 
+        // Read Q array: ALL solution data in ONE record
+        // Format: rho[all points], rhou[all points], rhov[all points], rhow[all points], rhoe[all points], ...
         skip_record_marker(&mut reader)?;
-        let rhoe = read_f32_array(&mut reader, total_points, byte_order)?;
+
+        // We expect NQ variables, each with total_points values
+        let mut q_data = vec![Vec::with_capacity(total_points); nq];
+        for n in 0..nq {
+            q_data[n] = read_f32_array(&mut reader, total_points, byte_order)?;
+        }
+
         skip_record_marker(&mut reader)?;
+
+        // Extract the conservative variables (first 5) and gamma (6th if present)
+        // NQ = 6 + NQC + NQT where first 6 are: rho*, rho*u*, rho*v*, rho*w*, rho*e0*, gamma
+        let rho = q_data.get(0).cloned().unwrap_or_default();
+        let rhou = q_data.get(1).cloned().unwrap_or_default();
+        let rhov = q_data.get(2).cloned().unwrap_or_default();
+        let rhow = q_data.get(3).cloned().unwrap_or_default();
+        let rhoe = q_data.get(4).cloned().unwrap_or_default();
+        let gamma = q_data.get(5).cloned(); // Optional: ratio of specific heats
+
+        // Validate we got the right amount of data
+        if rho.len() != total_points
+            || rhou.len() != total_points
+            || rhov.len() != total_points
+            || rhow.len() != total_points
+            || rhoe.len() != total_points
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Incomplete solution data for grid {}: expected {} points",
+                    grid_index, total_points
+                ),
+            ));
+        }
 
         solutions.push(Plot3DSolution {
             grid_index,
@@ -690,6 +730,7 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
             rhov,
             rhow,
             rhoe,
+            gamma,
         });
     }
 
@@ -814,6 +855,7 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
             rhov,
             rhow,
             rhoe,
+            gamma: None, // ASCII format typically doesn't include gamma
         });
     }
 
@@ -925,6 +967,15 @@ fn read_i32<R: Read>(reader: &mut R, byte_order: ByteOrder) -> io::Result<i32> {
     })
 }
 
+fn read_f32<R: Read>(reader: &mut R, byte_order: ByteOrder) -> io::Result<f32> {
+    let mut buf = [0u8; 4];
+    reader.read_exact(&mut buf)?;
+    Ok(match byte_order {
+        ByteOrder::LittleEndian => f32::from_le_bytes(buf),
+        ByteOrder::BigEndian => f32::from_be_bytes(buf),
+    })
+}
+
 /// Read Fortran record marker and return the record length in bytes
 fn read_record_marker<R: Read>(reader: &mut R, byte_order: ByteOrder) -> io::Result<i32> {
     read_i32(reader, byte_order)
@@ -973,7 +1024,7 @@ fn read_xyz_coords_with_markers<R: Read>(
 
     let total_values_f32 = record_size as usize / 4;
     let total_values_f64 = record_size as usize / 8;
-    
+
     // XYZ only (f32)
     if total_values_f32 == count * 3 {
         let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
@@ -992,7 +1043,7 @@ fn read_xyz_coords_with_markers<R: Read>(
         }
 
         Ok((x_coords, y_coords, z_coords, Precision::F32))
-    } 
+    }
     // XYZ only (f64)
     else if total_values_f64 == count * 3 {
         let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
@@ -1017,7 +1068,7 @@ fn read_xyz_coords_with_markers<R: Read>(
         let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
         let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
         let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
-        
+
         // Skip IBLANK data (will be read separately if needed)
         let mut iblank_data = vec![0u8; count * 4];
         reader.read_exact(&mut iblank_data)?;
@@ -1040,7 +1091,7 @@ fn read_xyz_coords_with_markers<R: Read>(
         let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
         let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
         let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
-        
+
         // Skip IBLANK data (will be read separately if needed)
         let mut iblank_data = vec![0u8; count * 4];
         reader.read_exact(&mut iblank_data)?;
@@ -1262,6 +1313,7 @@ mod tests {
             rhov: vec![],
             rhow: vec![],
             rhoe: vec![],
+            gamma: None,
         };
         assert_eq!(solution.total_points(), 60);
     }
@@ -1632,54 +1684,52 @@ mod tests {
         temp_file.write_all(&1i32.to_le_bytes())?; // num_grids = 1
         temp_file.write_all(&4i32.to_le_bytes())?; // Closing marker
 
-        // Record 2: dimensions (3 integers = 12 bytes)
-        temp_file.write_all(&12i32.to_le_bytes())?; // Opening marker
+        // Record 2: dimensions + NQ + NQC (5 integers = 20 bytes)
+        temp_file.write_all(&20i32.to_le_bytes())?; // Opening marker
         temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
         temp_file.write_all(&1i32.to_le_bytes())?; // j = 1
         temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
-        temp_file.write_all(&12i32.to_le_bytes())?; // Closing marker
+        temp_file.write_all(&6i32.to_le_bytes())?; // NQ = 6 (5 conservative + gamma)
+        temp_file.write_all(&0i32.to_le_bytes())?; // NQC = 0 (no species)
+        temp_file.write_all(&20i32.to_le_bytes())?; // Closing marker
 
-        // Solution data for 2 points (i=2, j=1, k=1), 5 variables
+        // Record 3: Metadata record (minimal - just write a small metadata block)
+        // For simplicity, write a small metadata record (16 floats = 64 bytes)
+        temp_file.write_all(&64i32.to_le_bytes())?; // Opening marker
+        for _ in 0..16 {
+            temp_file.write_all(&0.0f32.to_le_bytes())?;
+        }
+        temp_file.write_all(&64i32.to_le_bytes())?; // Closing marker
+
+        // Solution data for 2 points (i=2, j=1, k=1), 6 variables in ONE record
         let rho_data = vec![1.0f32, 2.0f32];
         let rhou_data = vec![3.0f32, 4.0f32];
         let rhov_data = vec![5.0f32, 6.0f32];
         let rhow_data = vec![7.0f32, 8.0f32];
         let rhoe_data = vec![9.0f32, 10.0f32];
+        let gamma_data = vec![1.4f32, 1.4f32];
 
-        // Record 3: rho array (2 floats = 8 bytes)
-        temp_file.write_all(&8i32.to_le_bytes())?;
+        // Record 4: All Q variables in ONE record (6 variables * 2 points * 4 bytes = 48 bytes)
+        temp_file.write_all(&48i32.to_le_bytes())?; // Opening marker
         for v in &rho_data {
             temp_file.write_all(&v.to_le_bytes())?;
         }
-        temp_file.write_all(&8i32.to_le_bytes())?;
-
-        // Record 4: rhou array
-        temp_file.write_all(&8i32.to_le_bytes())?;
         for v in &rhou_data {
             temp_file.write_all(&v.to_le_bytes())?;
         }
-        temp_file.write_all(&8i32.to_le_bytes())?;
-
-        // Record 5: rhov array
-        temp_file.write_all(&8i32.to_le_bytes())?;
         for v in &rhov_data {
             temp_file.write_all(&v.to_le_bytes())?;
         }
-        temp_file.write_all(&8i32.to_le_bytes())?;
-
-        // Record 6: rhow array
-        temp_file.write_all(&8i32.to_le_bytes())?;
         for v in &rhow_data {
             temp_file.write_all(&v.to_le_bytes())?;
         }
-        temp_file.write_all(&8i32.to_le_bytes())?;
-
-        // Record 7: rhoe array
-        temp_file.write_all(&8i32.to_le_bytes())?;
         for v in &rhoe_data {
             temp_file.write_all(&v.to_le_bytes())?;
         }
-        temp_file.write_all(&8i32.to_le_bytes())?;
+        for v in &gamma_data {
+            temp_file.write_all(&v.to_le_bytes())?;
+        }
+        temp_file.write_all(&48i32.to_le_bytes())?; // Closing marker
 
         temp_file.flush()?;
 
@@ -1695,6 +1745,136 @@ mod tests {
         assert_eq!(solutions[0].total_points(), 2);
         assert_eq!(solutions[0].rho, rho_data);
         assert_eq!(solutions[0].rhou, rhou_data);
+        assert_eq!(solutions[0].gamma, Some(gamma_data));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_binary_with_large_metadata() -> io::Result<()> {
+        // Test that we can handle metadata records larger than our minimal expectation
+        // Some PLOT3D variants have extended metadata with additional fields
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: dimensions + NQ + NQC
+        temp_file.write_all(&20i32.to_le_bytes())?;
+        temp_file.write_all(&3i32.to_le_bytes())?; // i = 3
+        temp_file.write_all(&2i32.to_le_bytes())?; // j = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&6i32.to_le_bytes())?; // NQ = 6
+        temp_file.write_all(&0i32.to_le_bytes())?; // NQC = 0
+        temp_file.write_all(&20i32.to_le_bytes())?;
+
+        // Record 3: Large metadata record (128 floats = 512 bytes)
+        // This is intentionally much larger than the minimal 16 floats we used before
+        temp_file.write_all(&512i32.to_le_bytes())?;
+        for i in 0..128 {
+            temp_file.write_all(&(i as f32).to_le_bytes())?;
+        }
+        temp_file.write_all(&512i32.to_le_bytes())?;
+
+        // Record 4: Q data for 6 points (3*2*1), 6 variables
+        let total_points = 6;
+        let total_floats = total_points * 6; // 36 floats = 144 bytes
+        temp_file.write_all(&(total_floats as i32 * 4).to_le_bytes())?;
+
+        // Write test data: rho, rhou, rhov, rhow, rhoe, gamma
+        for var in 0..6 {
+            for pt in 0..total_points {
+                let value = (var * 10 + pt) as f32;
+                temp_file.write_all(&value.to_le_bytes())?;
+            }
+        }
+        temp_file.write_all(&(total_floats as i32 * 4).to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        // Test that it can be read successfully despite large metadata
+        let result = read_plot3d_solution(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read solution with large metadata: {:?}",
+            result.err()
+        );
+
+        let solutions = result.unwrap();
+        assert_eq!(solutions.len(), 1);
+        assert_eq!(solutions[0].total_points(), 6);
+
+        // Verify the data was read correctly (rho should be 0,1,2,3,4,5)
+        assert_eq!(solutions[0].rho[0], 0.0);
+        assert_eq!(solutions[0].rho[1], 1.0);
+        assert_eq!(solutions[0].rho[5], 5.0);
+
+        // Verify gamma was extracted correctly (should be 50,51,52,53,54,55)
+        assert!(solutions[0].gamma.is_some());
+        let gamma = solutions[0].gamma.as_ref().unwrap();
+        assert_eq!(gamma[0], 50.0);
+        assert_eq!(gamma[5], 55.0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_binary_with_minimal_metadata() -> io::Result<()> {
+        // Test with minimal metadata (e.g., just a few required fields)
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: dimensions + NQ + NQC
+        temp_file.write_all(&20i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&2i32.to_le_bytes())?; // j = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&6i32.to_le_bytes())?; // NQ = 6
+        temp_file.write_all(&0i32.to_le_bytes())?; // NQC = 0
+        temp_file.write_all(&20i32.to_le_bytes())?;
+
+        // Record 3: Minimal metadata (just 4 floats = 16 bytes)
+        temp_file.write_all(&16i32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?; // REFMACH
+        temp_file.write_all(&0.0f32.to_le_bytes())?; // ALPHA
+        temp_file.write_all(&0.0f32.to_le_bytes())?; // REY
+        temp_file.write_all(&0.0f32.to_le_bytes())?; // TIME
+        temp_file.write_all(&16i32.to_le_bytes())?;
+
+        // Record 4: Q data for 4 points, 6 variables
+        let total_points = 4;
+        temp_file.write_all(&96i32.to_le_bytes())?; // 24 floats * 4 bytes
+
+        for var in 0..6 {
+            for pt in 0..total_points {
+                temp_file.write_all(&((var + 1) as f32).to_le_bytes())?;
+            }
+        }
+        temp_file.write_all(&96i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read solution with minimal metadata: {:?}",
+            result.err()
+        );
+
+        let solutions = result.unwrap();
+        assert_eq!(solutions.len(), 1);
+        assert_eq!(solutions[0].total_points(), 4);
+        assert_eq!(solutions[0].rho[0], 1.0);
+        assert_eq!(solutions[0].rhoe[0], 5.0);
+
+        assert!(solutions[0].gamma.is_some());
+        assert_eq!(solutions[0].gamma.as_ref().unwrap()[0], 6.0);
 
         Ok(())
     }

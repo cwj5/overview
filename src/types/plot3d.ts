@@ -14,4 +14,5 @@ export interface Plot3DSolution {
     rhov: number[]; // Momentum Y
     rhow: number[]; // Momentum Z
     rhoe: number[]; // Energy
+    gamma?: number[]; // Ratio of specific heats (always at Q[5], NQ=6+NQC+NQT)
 }

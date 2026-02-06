@@ -13,6 +13,7 @@ interface MeshGeometry {
     normals: number[];
     vertex_count: number;
     face_count: number;
+    colors?: number[];
 }
 
 interface Viewer3DProps {
@@ -42,14 +43,27 @@ function MeshRenderer({
             'normal',
             new BufferAttribute(new Float32Array(meshGeometry.normals), 3)
         );
+
+        // Add vertex colors if available
+        if (meshGeometry.colors) {
+            geo.setAttribute(
+                'color',
+                new BufferAttribute(new Float32Array(meshGeometry.colors), 3)
+            );
+        }
+
         geo.setIndex(new BufferAttribute(new Uint32Array(meshGeometry.indices), 1));
         return geo;
     }, [meshGeometry]);
 
+    // Use vertex colors if available, otherwise use single color
+    const hasColors = meshGeometry.colors && meshGeometry.colors.length > 0;
+
     return (
         <mesh geometry={geometry}>
             <meshStandardMaterial
-                color={color}
+                color={hasColors ? 'white' : color}
+                vertexColors={hasColors}
                 wireframe={wireframe}
                 transparent={dimmed}
                 opacity={dimmed ? 0.35 : 1}

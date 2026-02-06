@@ -17,10 +17,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
 import Viewer3D from "./components/Viewer3D";
 import { LogViewer } from "./components/LogViewer";
+import { SolutionViewer } from "./components/SolutionViewer";
 import { logger } from "./utils/logger";
 import { groupGridsByFile } from "./utils/gridUtils";
 import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
 import type { GridItem } from "./types/grids";
+import type { ScalarField } from "./utils/solutionData";
 import "./App.css";
 
 interface FileMetadata {
@@ -66,6 +68,7 @@ function App() {
   const [selectedGridId, setSelectedGridId] = useState<string | null>(null);
   const [isolateSelected, setIsolateSelected] = useState(false);
   const [hasSolution, setHasSolution] = useState(false);
+  const [_currentScalarField, setCurrentScalarField] = useState<ScalarField>('density');
 
   useEffect(() => {
     const setupMenu = async () => {
@@ -179,7 +182,7 @@ function App() {
             for (let i = 0; i < solutions.length; i++) {
               const solution = solutions[i];
               const gridItem = allGrids.find((g) => g.gridIndex === solution.grid_index);
-              
+
               if (!gridItem) {
                 throw new Error(`Solution grid ${solution.grid_index + 1} not found in loaded grids`);
               }
@@ -266,9 +269,9 @@ function App() {
             {loading ? 'Loading...' : 'Load Files'}
           </button>
           {hasSolution && (
-            <span style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
+            <span style={{
+              display: 'flex',
+              alignItems: 'center',
               gap: '6px',
               padding: '8px 12px',
               background: '#10b981',
@@ -459,6 +462,15 @@ function App() {
                     ✓ Solution data loaded
                   </div>
                 )}
+              </div>
+            )}
+
+            {selectedGrid && selectedGrid.solution && (
+              <div style={{ marginTop: '12px' }}>
+                <SolutionViewer
+                  selectedGrid={selectedGrid}
+                  onScalarFieldChange={setCurrentScalarField}
+                />
               </div>
             )}
           </aside>
