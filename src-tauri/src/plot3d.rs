@@ -25,6 +25,28 @@ pub struct GridFileMetadata {
     pub grid_dimensions: Vec<GridDimensions>,
 }
 
+/// PLOT3D solution metadata from Q file header
+/// Fields are read in sequence; if the metadata record is shorter than expected,
+/// later fields will be None
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Plot3DMetadata {
+    pub refmach: Option<f32>,   // Reference Mach number
+    pub alpha: Option<f32>,     // Angle of attack (degrees)
+    pub rey: Option<f32>,       // Reynolds number
+    pub time: Option<f32>,      // Time value
+    pub gaminf: Option<f32>,    // Gamma at infinity
+    pub beta: Option<f32>,      // Sideslip angle (degrees)
+    pub tinf: Option<f32>,      // Temperature at infinity
+    pub igam: Option<f32>,      // Gas model flag (0=perfect gas, 1=equilibrium)
+    pub htinf: Option<f32>,     // Total enthalpy at infinity
+    pub ht1: Option<f32>,       // Reserved
+    pub ht2: Option<f32>,       // Reserved
+    pub rgas: Option<Vec<f32>>, // Gas constants (variable length)
+    pub fsmach: Option<f32>,    // Free stream Mach number
+    pub tvref: Option<f32>,     // Reference temperature
+    pub dtvref: Option<f32>,    // Delta reference temperature
+}
+
 /// Represents PLOT3D solution data (Q file)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plot3DSolution {
@@ -37,6 +59,8 @@ pub struct Plot3DSolution {
     pub rhoe: Vec<f32>, // Total Energy (non-dimensional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gamma: Option<Vec<f32>>, // Ratio of specific heats (always at Q[5], NQ=6+NQC+NQT)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Plot3DMetadata>, // Solution metadata from file header
 }
 
 /// PLOT3D function file data
@@ -219,6 +243,98 @@ impl Plot3DFunction {
     #[allow(dead_code)]
     pub fn total_points(&self) -> usize {
         (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
+    }
+}
+
+/// Parse metadata from buffer, reading as many fields as available
+/// Fields are read in order: REFMACH, ALPHA, REY, TIME, GAMINF, BETA, TINF, IGAM, HTINF, HT1, HT2, RGAS[...], FSMACH, TVREF, DTVREF
+/// If the buffer is shorter than expected, later fields will be None
+fn parse_metadata(buffer: &[u8], byte_order: ByteOrder) -> Plot3DMetadata {
+    let num_floats = buffer.len() / 4;
+    let mut values = Vec::with_capacity(num_floats);
+
+    // Read all available f32 values from buffer
+    for i in 0..num_floats {
+        let start = i * 4;
+        if start + 4 <= buffer.len() {
+            let bytes = [
+                buffer[start],
+                buffer[start + 1],
+                buffer[start + 2],
+                buffer[start + 3],
+            ];
+            let value = match byte_order {
+                ByteOrder::LittleEndian => f32::from_le_bytes(bytes),
+                ByteOrder::BigEndian => f32::from_be_bytes(bytes),
+            };
+            values.push(value);
+        }
+    }
+
+    // Extract fields in order - if not enough values, fields remain None
+    let refmach = values.get(0).copied();
+    let alpha = values.get(1).copied();
+    let rey = values.get(2).copied();
+    let time = values.get(3).copied();
+    let gaminf = values.get(4).copied();
+    let beta = values.get(5).copied();
+    let tinf = values.get(6).copied();
+    let igam = values.get(7).copied();
+    let htinf = values.get(8).copied();
+    let ht1 = values.get(9).copied();
+    let ht2 = values.get(10).copied();
+
+    // RGAS is variable length - collect remaining values except last 3 (FSMACH, TVREF, DTVREF)
+    // If we have at least 15 values (11 fixed + 1 RGAS + 3 tail), assume last 3 are FSMACH, TVREF, DTVREF
+    let (rgas, fsmach, tvref, dtvref) = if values.len() > 14 {
+        let rgas_values: Vec<f32> = values[11..values.len() - 3].to_vec();
+        let fsmach = values.get(values.len() - 3).copied();
+        let tvref = values.get(values.len() - 2).copied();
+        let dtvref = values.get(values.len() - 1).copied();
+        (
+            if rgas_values.is_empty() {
+                None
+            } else {
+                Some(rgas_values)
+            },
+            fsmach,
+            tvref,
+            dtvref,
+        )
+    } else if values.len() > 11 {
+        // We have values beyond the first 11, but not enough for the last 3
+        let rgas_values: Vec<f32> = values[11..].to_vec();
+        (
+            if rgas_values.is_empty() {
+                None
+            } else {
+                Some(rgas_values)
+            },
+            None,
+            None,
+            None,
+        )
+    } else {
+        // No RGAS or tail values
+        (None, None, None, None)
+    };
+
+    Plot3DMetadata {
+        refmach,
+        alpha,
+        rey,
+        time,
+        gaminf,
+        beta,
+        tinf,
+        igam,
+        htinf,
+        ht1,
+        ht2,
+        rgas,
+        fsmach,
+        tvref,
+        dtvref,
     }
 }
 
@@ -673,17 +789,20 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        // Read metadata record (skip it - we don't need these parameters)
+        // Read metadata record and parse it
         // REFMACH, ALPHA, REY, TIME, GAMINF, BETA, TINF, IGAM, HTINF, HT1, HT2, RGAS[...], FSMACH, TVREF, DTVREF
         let metadata_record_size = read_record_marker(&mut reader, byte_order)? as usize;
-        let mut skip_buf = vec![0u8; metadata_record_size];
-        reader.read_exact(&mut skip_buf).map_err(|e| {
+        let mut metadata_buf = vec![0u8; metadata_record_size];
+        reader.read_exact(&mut metadata_buf).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Failed to skip metadata record: {}", e),
+                format!("Failed to read metadata record: {}", e),
             )
         })?;
         skip_record_marker(&mut reader)?;
+
+        // Parse metadata - will read as many fields as are available
+        let metadata = parse_metadata(&metadata_buf, byte_order);
 
         // Read Q array: ALL solution data in ONE record
         // Format: rho[all points], rhou[all points], rhov[all points], rhow[all points], rhoe[all points], ...
@@ -731,6 +850,7 @@ pub fn read_plot3d_solution<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DSol
             rhow,
             rhoe,
             gamma,
+            metadata: Some(metadata),
         });
     }
 
@@ -787,18 +907,23 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
         });
     }
 
-    // Read solution data for each grid (5 variables: rho, rhou, rhov, rhow, rhoe)
+    // Read solution data for each grid
     for (grid_index, dims) in dimensions_list.into_iter().enumerate() {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
-        let mut rho = Vec::with_capacity(total_points);
-        let mut rhou = Vec::with_capacity(total_points);
-        let mut rhov = Vec::with_capacity(total_points);
-        let mut rhow = Vec::with_capacity(total_points);
-        let mut rhoe = Vec::with_capacity(total_points);
 
-        // Read 5 arrays of solution variables
-        let mut vars_read = 0;
-        let mut values_read = 0;
+        // First, read metadata values (variable number depending on file format)
+        // Try to read metadata fields: REFMACH, ALPHA, REY, TIME, GAMINF, BETA, TINF, IGAM, HTINF, HT1, HT2, RGAS[...], FSMACH, TVREF, DTVREF
+        // For ASCII files, we need to parse until we find the solution data
+        // Minimum metadata is 4 values (REFMACH, ALPHA, REY, TIME)
+        // We'll read values greedily and then determine which are metadata vs solution data
+
+        let mut all_values: Vec<f32> = Vec::new();
+
+        // Read values until we have enough for metadata + solution data
+        // We need: metadata (at least 4 floats) + 5 variable arrays * total_points
+        let min_metadata_count = 4;
+        let min_solution_count = 5 * total_points;
+        let min_total = min_metadata_count + min_solution_count;
 
         for line in lines.by_ref() {
             let line = line?;
@@ -806,35 +931,96 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
                 .split_whitespace()
                 .map(|s| s.parse::<f32>())
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "Cannot parse solution value")
-                })?;
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Cannot parse value"))?;
 
-            for value in values {
-                match vars_read {
-                    0 => rho.push(value),
-                    1 => rhou.push(value),
-                    2 => rhov.push(value),
-                    3 => rhow.push(value),
-                    4 => rhoe.push(value),
-                    _ => unreachable!(),
-                }
-                values_read += 1;
+            all_values.extend(values);
 
-                if values_read == total_points {
-                    vars_read += 1;
-                    values_read = 0;
-                    if vars_read == 5 {
-                        break;
-                    }
-                }
-            }
-
-            if vars_read == 5 {
+            if all_values.len() >= min_total {
                 break;
             }
         }
 
+        if all_values.len() < min_total {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Incomplete solution data for grid {}: expected at least {} values, got {}",
+                    grid_index,
+                    min_total,
+                    all_values.len()
+                ),
+            ));
+        }
+
+        // Split into metadata and solution data
+        // We'll try to parse metadata first, reading as many fields as available
+        // but leaving at least 5*total_points for solution data
+        let max_metadata_idx = all_values.len() - min_solution_count;
+
+        // Convert metadata values to buffer format for parse_metadata function
+        let mut metadata_buf = Vec::new();
+        for i in 0..max_metadata_idx {
+            metadata_buf.extend_from_slice(&all_values[i].to_le_bytes());
+        }
+        let metadata = parse_metadata(&metadata_buf, ByteOrder::LittleEndian);
+
+        // Remaining values are solution data
+        let solution_data = &all_values[max_metadata_idx..];
+
+        let mut rho = Vec::with_capacity(total_points);
+        let mut rhou = Vec::with_capacity(total_points);
+        let mut rhov = Vec::with_capacity(total_points);
+        let mut rhow = Vec::with_capacity(total_points);
+        let mut rhoe = Vec::with_capacity(total_points);
+        let mut gamma = Vec::with_capacity(total_points);
+
+        // Distribute values across the 5+ variables
+        for (idx, &value) in solution_data.iter().enumerate() {
+            let var_index = idx / total_points;
+            let point_index = idx % total_points;
+
+            match var_index {
+                0 => {
+                    if point_index >= rho.len() {
+                        rho.push(value);
+                    }
+                }
+                1 => {
+                    if point_index >= rhou.len() {
+                        rhou.push(value);
+                    }
+                }
+                2 => {
+                    if point_index >= rhov.len() {
+                        rhov.push(value);
+                    }
+                }
+                3 => {
+                    if point_index >= rhow.len() {
+                        rhow.push(value);
+                    }
+                }
+                4 => {
+                    if point_index >= rhoe.len() {
+                        rhoe.push(value);
+                    }
+                }
+                5 => {
+                    if point_index >= gamma.len() {
+                        gamma.push(value);
+                    }
+                }
+                _ => break, // Additional variables beyond gamma
+            }
+        }
+
+        let gamma_opt = if gamma.len() == total_points {
+            Some(gamma)
+        } else {
+            None
+        };
+
+        // Validate we got the right amount of data
         if rho.len() != total_points
             || rhou.len() != total_points
             || rhov.len() != total_points
@@ -855,7 +1041,8 @@ pub fn read_plot3d_solution_ascii<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plo
             rhov,
             rhow,
             rhoe,
-            gamma: None, // ASCII format typically doesn't include gamma
+            gamma: gamma_opt,
+            metadata: Some(metadata),
         });
     }
 
@@ -1314,6 +1501,7 @@ mod tests {
             rhow: vec![],
             rhoe: vec![],
             gamma: None,
+            metadata: None,
         };
         assert_eq!(solution.total_points(), 60);
     }
@@ -1455,6 +1643,9 @@ mod tests {
         writeln!(temp_file, "1")?; // 1 grid
         writeln!(temp_file, "2 1 1")?; // 2x1x1 = 2 points
 
+        // Write metadata (4 minimum values): REFMACH, ALPHA, REY, TIME
+        writeln!(temp_file, "1.2 5.0 1e6 0.5")?;
+
         // Write 5 variables × 2 points = 10 values
         writeln!(temp_file, "1.0 2.0")?; // rho
         writeln!(temp_file, "3.0 4.0")?; // rhou
@@ -1465,7 +1656,11 @@ mod tests {
         temp_file.flush()?;
 
         let result = read_plot3d_solution_ascii(temp_file.path());
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "Failed to read ASCII solution: {:?}",
+            result.err()
+        );
 
         let solutions = result.unwrap();
         assert_eq!(solutions.len(), 1);
@@ -1475,6 +1670,12 @@ mod tests {
         assert_eq!(solutions[0].rhov, vec![5.0, 6.0]);
         assert_eq!(solutions[0].rhow, vec![7.0, 8.0]);
         assert_eq!(solutions[0].rhoe, vec![9.0, 10.0]);
+
+        // Check metadata was parsed
+        assert!(solutions[0].metadata.is_some());
+        let meta = solutions[0].metadata.as_ref().unwrap();
+        assert_eq!(meta.refmach, Some(1.2));
+        assert_eq!(meta.alpha, Some(5.0));
 
         Ok(())
     }
@@ -1785,8 +1986,8 @@ mod tests {
 
         // Write test data: rho, rhou, rhov, rhow, rhoe, gamma
         for var in 0..6 {
-            for pt in 0..total_points {
-                let value = (var * 10 + pt) as f32;
+            for _pt in 0..total_points {
+                let value = (var * 10 + _pt) as f32;
                 temp_file.write_all(&value.to_le_bytes())?;
             }
         }
@@ -1852,7 +2053,7 @@ mod tests {
         temp_file.write_all(&96i32.to_le_bytes())?; // 24 floats * 4 bytes
 
         for var in 0..6 {
-            for pt in 0..total_points {
+            for _pt in 0..total_points {
                 temp_file.write_all(&((var + 1) as f32).to_le_bytes())?;
             }
         }
@@ -1875,6 +2076,229 @@ mod tests {
 
         assert!(solutions[0].gamma.is_some());
         assert_eq!(solutions[0].gamma.as_ref().unwrap()[0], 6.0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_metadata_full() {
+        // Test parsing full metadata with all fields
+        let mut buffer = Vec::new();
+        let values: Vec<f32> = vec![
+            1.2,   // REFMACH
+            5.0,   // ALPHA
+            1e6,   // REY
+            0.5,   // TIME
+            1.4,   // GAMINF
+            0.0,   // BETA
+            288.0, // TINF
+            0.0,   // IGAM
+            500.0, // HTINF
+            100.0, // HT1
+            200.0, // HT2
+            287.0, // RGAS[0]
+            0.5,   // FSMACH
+            300.0, // TVREF
+            50.0,  // DTVREF
+        ];
+
+        for val in &values {
+            buffer.extend_from_slice(&(*val).to_le_bytes());
+        }
+
+        let metadata = parse_metadata(&buffer, ByteOrder::LittleEndian);
+
+        assert_eq!(metadata.refmach, Some(1.2));
+        assert_eq!(metadata.alpha, Some(5.0));
+        assert_eq!(metadata.rey, Some(1e6));
+        assert_eq!(metadata.time, Some(0.5));
+        assert_eq!(metadata.gaminf, Some(1.4));
+        assert_eq!(metadata.beta, Some(0.0));
+        assert_eq!(metadata.tinf, Some(288.0));
+        assert_eq!(metadata.igam, Some(0.0));
+        assert_eq!(metadata.htinf, Some(500.0));
+        assert_eq!(metadata.ht1, Some(100.0));
+        assert_eq!(metadata.ht2, Some(200.0));
+        assert_eq!(metadata.rgas, Some(vec![287.0]));
+        assert_eq!(metadata.fsmach, Some(0.5));
+        assert_eq!(metadata.tvref, Some(300.0));
+        assert_eq!(metadata.dtvref, Some(50.0));
+    }
+
+    #[test]
+    fn test_parse_metadata_minimal() {
+        // Test parsing minimal metadata (only first 4 fields)
+        let mut buffer = Vec::new();
+        let values: Vec<f32> = vec![
+            1.5,  // REFMACH
+            10.0, // ALPHA
+            5e5,  // REY
+            1.0,  // TIME
+        ];
+
+        for val in &values {
+            buffer.extend_from_slice(&(*val).to_le_bytes());
+        }
+
+        let metadata = parse_metadata(&buffer, ByteOrder::LittleEndian);
+
+        assert_eq!(metadata.refmach, Some(1.5));
+        assert_eq!(metadata.alpha, Some(10.0));
+        assert_eq!(metadata.rey, Some(5e5));
+        assert_eq!(metadata.time, Some(1.0));
+        assert_eq!(metadata.gaminf, None);
+        assert_eq!(metadata.beta, None);
+        assert_eq!(metadata.tinf, None);
+        assert_eq!(metadata.igam, None);
+        assert_eq!(metadata.htinf, None);
+        assert_eq!(metadata.ht1, None);
+        assert_eq!(metadata.ht2, None);
+        assert_eq!(metadata.rgas, None);
+        assert_eq!(metadata.fsmach, None);
+        assert_eq!(metadata.tvref, None);
+        assert_eq!(metadata.dtvref, None);
+    }
+
+    #[test]
+    fn test_parse_metadata_with_multiple_rgas() {
+        // Test parsing metadata with multiple RGAS values
+        let mut buffer = Vec::new();
+        let values: Vec<f32> = vec![
+            1.0,   // REFMACH
+            0.0,   // ALPHA
+            1e7,   // REY
+            0.0,   // TIME
+            1.4,   // GAMINF
+            0.0,   // BETA
+            300.0, // TINF
+            0.0,   // IGAM
+            600.0, // HTINF
+            50.0,  // HT1
+            100.0, // HT2
+            287.0, // RGAS[0]
+            1.0,   // RGAS[1]
+            2.0,   // RGAS[2]
+            0.6,   // FSMACH
+            280.0, // TVREF
+            10.0,  // DTVREF
+        ];
+
+        for val in &values {
+            buffer.extend_from_slice(&(*val).to_le_bytes());
+        }
+
+        let metadata = parse_metadata(&buffer, ByteOrder::LittleEndian);
+
+        assert_eq!(metadata.rgas, Some(vec![287.0, 1.0, 2.0]));
+        assert_eq!(metadata.fsmach, Some(0.6));
+        assert_eq!(metadata.tvref, Some(280.0));
+        assert_eq!(metadata.dtvref, Some(10.0));
+    }
+
+    #[test]
+    fn test_parse_metadata_big_endian() {
+        // Test parsing metadata with big-endian byte order
+        let mut buffer = Vec::new();
+        let values: Vec<f32> = vec![
+            1.2, // REFMACH
+            5.0, // ALPHA
+            1e6, // REY
+            0.5, // TIME
+        ];
+
+        for val in &values {
+            buffer.extend_from_slice(&(*val).to_be_bytes());
+        }
+
+        let metadata = parse_metadata(&buffer, ByteOrder::BigEndian);
+
+        assert_eq!(metadata.refmach, Some(1.2));
+        assert_eq!(metadata.alpha, Some(5.0));
+        assert_eq!(metadata.rey, Some(1e6));
+        assert_eq!(metadata.time, Some(0.5));
+    }
+
+    #[test]
+    fn test_read_plot3d_solution_with_metadata() -> io::Result<()> {
+        // Test reading solution with full metadata parsed
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: num_grids
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: dimensions + NQ + NQC
+        temp_file.write_all(&20i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&2i32.to_le_bytes())?; // j = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&6i32.to_le_bytes())?; // NQ = 6
+        temp_file.write_all(&0i32.to_le_bytes())?; // NQC = 0
+        temp_file.write_all(&20i32.to_le_bytes())?;
+
+        // Record 3: Full metadata (15 values = 60 bytes)
+        temp_file.write_all(&60i32.to_le_bytes())?;
+        let metadata_values: Vec<f32> = vec![
+            1.2,   // REFMACH
+            5.0,   // ALPHA
+            1e6,   // REY
+            0.5,   // TIME
+            1.4,   // GAMINF
+            0.0,   // BETA
+            288.0, // TINF
+            0.0,   // IGAM
+            500.0, // HTINF
+            100.0, // HT1
+            200.0, // HT2
+            287.0, // RGAS[0]
+            0.5,   // FSMACH
+            300.0, // TVREF
+            50.0,  // DTVREF
+        ];
+        for val in &metadata_values {
+            temp_file.write_all(&(*val).to_le_bytes())?;
+        }
+        temp_file.write_all(&60i32.to_le_bytes())?;
+
+        // Record 4: Q data for 4 points, 6 variables
+        let total_points = 4;
+        temp_file.write_all(&96i32.to_le_bytes())?; // 24 floats * 4 bytes
+
+        for var in 0..6 {
+            for _pt in 0..total_points {
+                temp_file.write_all(&((var + 1) as f32).to_le_bytes())?;
+            }
+        }
+        temp_file.write_all(&96i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_solution(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read solution: {:?}",
+            result.err()
+        );
+
+        let solutions = result.unwrap();
+        assert_eq!(solutions.len(), 1);
+
+        let sol = &solutions[0];
+        assert_eq!(sol.total_points(), 4);
+
+        // Check metadata was parsed correctly
+        assert!(sol.metadata.is_some());
+        let meta = sol.metadata.as_ref().unwrap();
+        assert_eq!(meta.refmach, Some(1.2));
+        assert_eq!(meta.alpha, Some(5.0));
+        assert_eq!(meta.rey, Some(1e6));
+        assert_eq!(meta.time, Some(0.5));
+        assert_eq!(meta.gaminf, Some(1.4));
+        assert_eq!(meta.rgas, Some(vec![287.0]));
+        assert_eq!(meta.fsmach, Some(0.5));
+        assert_eq!(meta.tvref, Some(300.0));
+        assert_eq!(meta.dtvref, Some(50.0));
 
         Ok(())
     }

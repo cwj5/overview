@@ -61,7 +61,11 @@ pub fn compute_scalar_field(solution: &Plot3DSolution, field: ScalarField) -> Ve
             for i in 0..total_points {
                 let rho = solution.rho[i];
                 if rho > 0.0 {
-                    let gamma = solution.gamma.as_ref().map(|g| g[i]).unwrap_or(DEFAULT_GAMMA);
+                    let gamma = solution
+                        .gamma
+                        .as_ref()
+                        .map(|g| g[i])
+                        .unwrap_or(DEFAULT_GAMMA);
                     let u = solution.rhou[i] / rho;
                     let v = solution.rhov[i] / rho;
                     let w = solution.rhow[i] / rho;
@@ -248,6 +252,7 @@ mod tests {
             rhow,
             rhoe,
             gamma,
+            metadata: None,
         }
     }
 

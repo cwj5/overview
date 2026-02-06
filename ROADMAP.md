@@ -98,9 +98,9 @@ This document outlines the future development work needed to create a full-featu
 - [ ] Combination modes (wireframe + shaded)
 
 ### 2.2 Solution Data Visualization
-- [ ] Scalar field visualization
-  - [ ] Color mapping to scalar values
-  - [ ] Configurable color schemes (rainbow, grayscale, etc.)
+- [x] Scalar field visualization
+  - [x] Color mapping to scalar values
+  - [x] Configurable color schemes (rainbow, grayscale, etc.)
   - [ ] Color bar/legend display
   - [ ] Value range adjustment (min/max)
 - [ ] Vector field visualization
@@ -222,8 +222,9 @@ Research and implement PLOT3D's 74 built-in functions:
 ## Phase 8: Testing and Documentation
 
 ### 8.1 Testing
-- [x] Unit tests for PLOT3D parser (25+ tests in plot3d.rs)
+- [x] Unit tests for PLOT3D parser (30+ tests in plot3d.rs including metadata parsing)
 - [x] Unit tests for grid utilities (TypeScript)
+- [x] Unit tests for solution data computation (Rust + TypeScript)
 - [x] Test framework setup (Vitest + Rust test harness)
 - [ ] Integration tests for file I/O
 - [ ] Visual regression tests for rendering
@@ -242,12 +243,15 @@ Research and implement PLOT3D's 74 built-in functions:
 ## 🎯 Immediate Next Steps (Priority Order)
 
 ### High Priority - Core Visualization Enhancements
-1. **Solution Data Visualization** (Phase 2.2)
-   - Implement scalar field color mapping (density, pressure, Mach)
-   - Add configurable color schemes (rainbow, viridis, turbo)
-   - Create color bar/legend UI component
-   - Allow value range adjustment (min/max clipping)
-   - Display scalar values on hover (point probe)
+1. **Solution Data Visualization** (Phase 2.2) - IN PROGRESS
+   - [x] Gamma extraction from solution files (Q[5])
+   - [x] Pressure calculation using gamma
+   - [x] Scalar field color mapping (density, pressure, velocity, etc.)
+   - [x] Configurable color schemes (rainbow, grayscale, viridis, turbo)
+   - [x] Metadata parsing from PLOT3D solution files
+   - [ ] Color bar/legend UI component
+   - [ ] Allow value range adjustment (min/max clipping)
+   - [ ] Display scalar values on hover (point probe)
 
 2. **Rendering Improvements** (Phase 2.1)
    - Implement smooth shading (average vertex normals)
