@@ -138,10 +138,6 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                 results.forEach((result) => {
                     if ("mesh" in result) {
                         next[result.id] = result.mesh;
-                        logger.info(
-                            `Mesh generated for ${result.id}: ${result.mesh.vertex_count} vertices, ${result.mesh.face_count} faces`,
-                            'Viewer3D'
-                        );
                     }
                 });
                 return next;

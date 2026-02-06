@@ -165,11 +165,6 @@ fn load_plot3d_function(path: String) -> Result<Vec<Plot3DFunction>, String> {
 /// Convert PLOT3D grid to Three.js mesh geometry
 #[tauri::command]
 fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
-    log_debug(&format!(
-        "Converting grid ({}x{}x{}) to mesh geometry",
-        grid.dimensions.i, grid.dimensions.j, grid.dimensions.k
-    ));
-
     // Validate grid data
     let total_points = grid.total_points();
     if grid.x_coords.len() != total_points {
@@ -204,11 +199,6 @@ fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
     }
 
     let mesh = grid.to_mesh_geometry();
-
-    log_info(&format!(
-        "Generated mesh with {} vertices and {} faces",
-        mesh.vertex_count, mesh.face_count
-    ));
 
     Ok(mesh)
 }
