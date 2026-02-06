@@ -140,7 +140,6 @@ impl Plot3DGrid {
     pub fn to_mesh_geometry(&self) -> MeshGeometry {
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
-        let k = self.dimensions.k as usize;
         let total_points = self.total_points();
 
         // Convert coordinates to vertex array (x, y, z interleaved)
@@ -1232,6 +1231,7 @@ fn read_i32<R: Read>(reader: &mut R, byte_order: ByteOrder) -> io::Result<i32> {
     })
 }
 
+#[allow(dead_code)]
 fn read_f32<R: Read>(reader: &mut R, byte_order: ByteOrder) -> io::Result<f32> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf)?;

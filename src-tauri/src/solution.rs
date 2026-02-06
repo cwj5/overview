@@ -166,6 +166,7 @@ pub fn compute_colors(values: &[f32]) -> Vec<f32> {
 }
 
 /// Compute field statistics
+#[allow(dead_code)]
 pub struct FieldStats {
     pub min: f32,
     pub max: f32,
@@ -173,6 +174,7 @@ pub struct FieldStats {
     pub std_dev: f32,
 }
 
+#[allow(dead_code)]
 pub fn compute_field_stats(values: &[f32]) -> FieldStats {
     if values.is_empty() {
         return FieldStats {
