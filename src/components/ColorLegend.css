@@ -1,0 +1,119 @@
+.color-legend {
+    display: flex;
+    font-size: 11px;
+    color: #e2e8f0;
+}
+
+.color-legend.horizontal {
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+}
+
+.color-legend.vertical {
+    flex-direction: row;
+    gap: 8px;
+    height: 200px;
+}
+
+.color-legend-label {
+    font-weight: bold;
+    font-size: 12px;
+    color: #cbd5e1;
+    text-align: center;
+}
+
+.color-legend-container {
+    position: relative;
+    display: flex;
+}
+
+/* Horizontal layout */
+.color-legend.horizontal .color-legend-container {
+    flex-direction: column;
+    gap: 6px;
+}
+
+.color-legend.horizontal .color-legend-gradient {
+    height: 24px;
+    width: 100%;
+    border-radius: 4px;
+    border: 1px solid #374151;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.color-legend.horizontal .color-legend-ticks {
+    position: relative;
+    height: 20px;
+    width: 100%;
+}
+
+.color-legend.horizontal .color-legend-tick {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translateX(-50%);
+}
+
+.color-legend.horizontal .color-legend-tick-mark {
+    width: 1px;
+    height: 4px;
+    background: #64748b;
+}
+
+.color-legend.horizontal .color-legend-tick-label {
+    margin-top: 2px;
+    color: #94a3b8;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* Vertical layout */
+.color-legend.vertical .color-legend-container {
+    flex-direction: row;
+    gap: 6px;
+}
+
+.color-legend.vertical .color-legend-gradient {
+    width: 24px;
+    height: 100%;
+    border-radius: 4px;
+    border: 1px solid #374151;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.color-legend.vertical .color-legend-ticks {
+    position: relative;
+    width: 60px;
+    height: 100%;
+}
+
+.color-legend.vertical .color-legend-tick {
+    position: absolute;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    transform: translateY(50%);
+}
+
+.color-legend.vertical .color-legend-tick-mark {
+    width: 4px;
+    height: 1px;
+    background: #64748b;
+}
+
+.color-legend.vertical .color-legend-tick-label {
+    margin-left: 4px;
+    color: #94a3b8;
+    font-size: 10px;
+}
+
+/* Hover effects */
+.color-legend-gradient {
+    transition: border-color 0.2s ease;
+}
+
+.color-legend-gradient:hover {
+    border-color: #4b5563;
+}

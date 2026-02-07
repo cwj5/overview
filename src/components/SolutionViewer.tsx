@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { SCALAR_FIELDS, type ScalarField, formatValue, computeScalarField, getFieldStats } from '../utils/solutionData';
-import { mapValueToColor } from '../utils/colorMapping';
+import { type ColorScheme } from '../utils/colorMapping';
+import { ColorLegend } from './ColorLegend';
 import type { GridItem } from '../types/grids';
 import type { Plot3DSolution } from '../types/plot3d';
 import './SolutionViewer.css';
@@ -8,10 +9,12 @@ import './SolutionViewer.css';
 interface SolutionViewerProps {
     selectedGrid: GridItem | null;
     onScalarFieldChange?: (field: ScalarField) => void;
+    onColorSchemeChange?: (scheme: ColorScheme) => void;
 }
 
-export function SolutionViewer({ selectedGrid, onScalarFieldChange }: SolutionViewerProps) {
+export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchemeChange }: SolutionViewerProps) {
     const [selectedField, setSelectedField] = useState<ScalarField>('density');
+    const [colorScheme, setColorScheme] = useState<ColorScheme>('viridis');
     const [fieldStats, setFieldStats] = useState<{ min: number, max: number, mean: number, stdDev: number } | null>(null);
 
     const hasSolution = selectedGrid?.solution !== undefined;
@@ -33,6 +36,12 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange }: SolutionVi
         const field = e.target.value as ScalarField;
         setSelectedField(field);
         onScalarFieldChange?.(field);
+    };
+
+    const handleColorSchemeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const scheme = e.target.value as ColorScheme;
+        setColorScheme(scheme);
+        onColorSchemeChange?.(scheme);
     };
 
     if (!hasSolution) {
@@ -65,7 +74,7 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange }: SolutionVi
             </strong>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: '#cbd5f5' }}>
+                <label style={{ fontSize: '12px', color: '#cbd5e1' }}>
                     <strong>Field:</strong>
                 </label>
                 <select
@@ -89,9 +98,41 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange }: SolutionVi
                 </select>
             </div>
 
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                    <strong>Color Scheme:</strong>
+                </label>
+                <select
+                    value={colorScheme}
+                    onChange={handleColorSchemeChange}
+                    style={{
+                        padding: '6px',
+                        background: '#111827',
+                        color: '#e2e8f0',
+                        border: '1px solid #374151',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        cursor: 'pointer'
+                    }}
+                >
+                    <option value="viridis">Viridis (Perceptual)</option>
+                    <option value="turbo">Turbo (Google)</option>
+                    <option value="rainbow">Rainbow</option>
+                    <option value="hot">Hot (Fire)</option>
+                    <option value="grayscale">Grayscale</option>
+                </select>
+            </div>
+
             {fieldStats && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <ColorBar min={fieldStats.min} max={fieldStats.max} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <ColorLegend
+                        min={fieldStats.min}
+                        max={fieldStats.max}
+                        colorScheme={colorScheme}
+                        orientation="horizontal"
+                        numTicks={5}
+                        label={SCALAR_FIELDS.find(f => f.field === selectedField)?.name}
+                    />
 
                     <div style={{
                         display: 'grid',
@@ -126,41 +167,6 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange }: SolutionVi
                     </div>
                 </div>
             )}
-        </div>
-    );
-}
-
-interface ColorBarProps {
-    min: number;
-    max: number;
-}
-
-function ColorBar({ min, max }: ColorBarProps) {
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div
-                style={{
-                    height: '20px',
-                    background: `linear-gradient(to right, ${Array.from({ length: 11 }, (_, i) => {
-                        const value = i / 10;
-                        const color = mapValueToColor(value, 'viridis');
-                        const hex = `rgb(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)})`;
-                        return `${hex} ${i * 10}%`;
-                    }).join(',')})`,
-                    borderRadius: '4px',
-                    border: '1px solid #374151'
-                }}
-            />
-            <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: '10px',
-                color: '#94a3b8'
-            }}>
-                <span>{formatValue(min)}</span>
-                <span>{formatValue((min + max) / 2)}</span>
-                <span>{formatValue(max)}</span>
-            </div>
         </div>
     );
 }

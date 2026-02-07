@@ -5,6 +5,7 @@ import { BufferGeometry, BufferAttribute } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
 import type { GridItem } from '../types/grids';
+import type { ColorScheme } from '../utils/colorMapping';
 import { getVisibleGridItems } from '../utils/gridUtils';
 
 interface MeshGeometry {
@@ -21,6 +22,7 @@ interface Viewer3DProps {
     selectedGridId: string | null;
     isolateSelected: boolean;
     ignoreIblank: boolean;
+    colorScheme?: ColorScheme;
 }
 
 function MeshRenderer({
@@ -66,7 +68,9 @@ function MeshRenderer({
     );
 }
 
-export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignoreIblank }: Viewer3DProps) {
+export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignoreIblank, colorScheme: _colorScheme = 'viridis' }: Viewer3DProps) {
+    // _colorScheme will be used when we implement solution visualization in 3D
+    // For now it's passed through for future use
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);

@@ -23,6 +23,7 @@ import { groupGridsByFile } from "./utils/gridUtils";
 import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
 import type { GridItem } from "./types/grids";
 import type { ScalarField } from "./utils/solutionData";
+import type { ColorScheme } from "./utils/colorMapping";
 import "./App.css";
 
 interface FileMetadata {
@@ -70,6 +71,7 @@ function App() {
   const [hasSolution, setHasSolution] = useState(false);
   const [ignoreIblank, setIgnoreIblank] = useState(false);
   const [_currentScalarField, setCurrentScalarField] = useState<ScalarField>('density');
+  const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
 
   // Check if any grid has IBLANK data
   const hasIblankData = useMemo(() => {
@@ -492,13 +494,20 @@ function App() {
                 <SolutionViewer
                   selectedGrid={selectedGrid}
                   onScalarFieldChange={setCurrentScalarField}
+                  onColorSchemeChange={setCurrentColorScheme}
                 />
               </div>
             )}
           </aside>
 
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            <Viewer3D grids={grids} selectedGridId={selectedGridId} isolateSelected={isolateSelected} ignoreIblank={ignoreIblank} />
+            <Viewer3D
+              grids={grids}
+              selectedGridId={selectedGridId}
+              isolateSelected={isolateSelected}
+              ignoreIblank={ignoreIblank}
+              colorScheme={currentColorScheme}
+            />
           </div>
         </div>
         <LogViewer isOpen={showLogs} onToggle={setShowLogs} />

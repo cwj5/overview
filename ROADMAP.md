@@ -100,9 +100,10 @@ This document outlines the future development work needed to create a full-featu
 ### 2.2 Solution Data Visualization
 - [x] Scalar field visualization
   - [x] Color mapping to scalar values
-  - [x] Configurable color schemes (rainbow, grayscale, etc.)
-  - [ ] Color bar/legend display
-  - [ ] Value range adjustment (min/max)
+  - [x] Configurable color schemes (rainbow, grayscale, viridis, turbo, hot)
+  - [x] Color bar/legend display with dynamic scheme selection
+  - [ ] Value range adjustment (min/max clipping)
+  - [ ] Display scalar values on hover (point probe)
 - [ ] Vector field visualization
   - [ ] Arrow glyphs
   - [ ] Streamlines
@@ -243,13 +244,13 @@ Research and implement PLOT3D's 74 built-in functions:
 ## 🎯 Immediate Next Steps (Priority Order)
 
 ### High Priority - Core Visualization Enhancements
-1. **Solution Data Visualization** (Phase 2.2) - IN PROGRESS
+1. **Solution Data Visualization** (Phase 2.2) - MOSTLY COMPLETE ✅
    - [x] Gamma extraction from solution files (Q[5])
    - [x] Pressure calculation using gamma
    - [x] Scalar field color mapping (density, pressure, velocity, etc.)
-   - [x] Configurable color schemes (rainbow, grayscale, viridis, turbo)
+   - [x] Configurable color schemes (rainbow, grayscale, viridis, turbo, hot)
    - [x] Metadata parsing from PLOT3D solution files
-   - [ ] Color bar/legend UI component
+   - [x] Color bar/legend UI component with dynamic scheme selection
    - [ ] Allow value range adjustment (min/max clipping)
    - [ ] Display scalar values on hover (point probe)
 
