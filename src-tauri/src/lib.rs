@@ -279,7 +279,10 @@ fn load_plot3d_function(path: String) -> Result<Vec<Plot3DFunction>, String> {
 
 /// Convert PLOT3D grid to Three.js mesh geometry
 #[tauri::command]
-fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
+fn convert_grid_to_mesh(
+    grid: Plot3DGrid,
+    respect_iblank: Option<bool>,
+) -> Result<MeshGeometry, String> {
     // Validate grid data
     let total_points = grid.total_points();
     if grid.x_coords.len() != total_points {
@@ -313,7 +316,7 @@ fn convert_grid_to_mesh(grid: Plot3DGrid) -> Result<MeshGeometry, String> {
         return Err(error_msg);
     }
 
-    let mesh = grid.to_mesh_geometry();
+    let mesh = grid.to_mesh_geometry(respect_iblank.unwrap_or(false));
 
     Ok(mesh)
 }
@@ -347,8 +350,8 @@ fn compute_solution_colors(
     // Generate colors from scalar values
     let colors = compute_colors(&values);
 
-    // Create mesh geometry
-    let mut mesh = grid.to_mesh_geometry();
+    // Create mesh geometry (don't respect iblank for solution visualization)
+    let mut mesh = grid.to_mesh_geometry(false);
     mesh.colors = Some(colors);
 
     log_info(&format!(

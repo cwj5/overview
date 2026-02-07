@@ -136,11 +136,22 @@ impl Plot3DGrid {
     }
 
     /// Convert PLOT3D grid to Three.js mesh geometry
-    /// This creates a wireframe surface by connecting grid points
-    pub fn to_mesh_geometry(&self) -> MeshGeometry {
+    /// This creates quad edges for wireframe display (4 edges per quad, no triangulation)
+    /// If respect_iblank is true and iblank data exists, points with iblank=0 are excluded
+    pub fn to_mesh_geometry(&self, respect_iblank: bool) -> MeshGeometry {
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
         let total_points = self.total_points();
+
+        // Helper function to check if a point is blanked
+        let is_blanked = |idx: usize| -> bool {
+            if respect_iblank {
+                if let Some(ref iblank) = self.iblank {
+                    return iblank[idx] == 0;
+                }
+            }
+            false
+        };
 
         // Convert coordinates to vertex array (x, y, z interleaved)
         let mut vertices = Vec::with_capacity(total_points * 3);
@@ -150,11 +161,11 @@ impl Plot3DGrid {
             vertices.push(self.z_coords[idx]);
         }
 
-        // Generate indices for surface triangulation
+        // Generate line indices for quad edges (not triangles)
         // For a structured grid, we only render the k=1 surface (k=0 in 0-indexed)
         let mut indices = Vec::new();
 
-        // Triangulate I-J planes (constant K surfaces) - only k=0
+        // Create edges for I-J plane quads (constant K surface) - only k=0
         let k_idx = 0;
         for j_idx in 0..j - 1 {
             for i_idx in 0..i - 1 {
@@ -163,55 +174,75 @@ impl Plot3DGrid {
                 let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
                 let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
 
-                // First triangle of quad
+                // Skip this quad if any corner is blanked
+                if is_blanked(idx00) || is_blanked(idx10) || is_blanked(idx01) || is_blanked(idx11)
+                {
+                    continue;
+                }
+
+                // Bottom edge (idx00 -> idx10)
                 indices.push(idx00 as u32);
                 indices.push(idx10 as u32);
-                indices.push(idx01 as u32);
 
-                // Second triangle of quad
+                // Right edge (idx10 -> idx11)
                 indices.push(idx10 as u32);
                 indices.push(idx11 as u32);
+
+                // Top edge (idx11 -> idx01)
+                indices.push(idx11 as u32);
                 indices.push(idx01 as u32);
+
+                // Left edge (idx01 -> idx00)
+                indices.push(idx01 as u32);
+                indices.push(idx00 as u32);
             }
         }
 
-        // No I-K or J-K planes needed for k=1 surface only
-
-        // Compute vertex normals
+        // Compute simple vertex normals (averaged from adjacent faces)
+        // For line rendering, normals aren't critical, but we keep them for consistency
         let mut normals = vec![0.0f32; total_points * 3];
-        let face_count = indices.len() / 3;
 
-        for face_idx in 0..face_count {
-            let i0 = indices[face_idx * 3] as usize;
-            let i1 = indices[face_idx * 3 + 1] as usize;
-            let i2 = indices[face_idx * 3 + 2] as usize;
+        // For each quad, compute a normal and distribute it to vertices
+        for j_idx in 0..j - 1 {
+            for i_idx in 0..i - 1 {
+                let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
+                let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
 
-            let v0 = [vertices[i0 * 3], vertices[i0 * 3 + 1], vertices[i0 * 3 + 2]];
-            let v1 = [vertices[i1 * 3], vertices[i1 * 3 + 1], vertices[i1 * 3 + 2]];
-            let v2 = [vertices[i2 * 3], vertices[i2 * 3 + 1], vertices[i2 * 3 + 2]];
+                let v0 = [
+                    vertices[idx00 * 3],
+                    vertices[idx00 * 3 + 1],
+                    vertices[idx00 * 3 + 2],
+                ];
+                let v1 = [
+                    vertices[idx10 * 3],
+                    vertices[idx10 * 3 + 1],
+                    vertices[idx10 * 3 + 2],
+                ];
+                let v2 = [
+                    vertices[idx01 * 3],
+                    vertices[idx01 * 3 + 1],
+                    vertices[idx01 * 3 + 2],
+                ];
 
-            // Compute face normal using cross product
-            let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-            let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+                // Compute quad normal using cross product
+                let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+                let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
 
-            let normal = [
-                edge1[1] * edge2[2] - edge1[2] * edge2[1],
-                edge1[2] * edge2[0] - edge1[0] * edge2[2],
-                edge1[0] * edge2[1] - edge1[1] * edge2[0],
-            ];
+                let normal = [
+                    edge1[1] * edge2[2] - edge1[2] * edge2[1],
+                    edge1[2] * edge2[0] - edge1[0] * edge2[2],
+                    edge1[0] * edge2[1] - edge1[1] * edge2[0],
+                ];
 
-            // Add to vertex normals
-            normals[i0 * 3] += normal[0];
-            normals[i0 * 3 + 1] += normal[1];
-            normals[i0 * 3 + 2] += normal[2];
-
-            normals[i1 * 3] += normal[0];
-            normals[i1 * 3 + 1] += normal[1];
-            normals[i1 * 3 + 2] += normal[2];
-
-            normals[i2 * 3] += normal[0];
-            normals[i2 * 3 + 1] += normal[1];
-            normals[i2 * 3 + 2] += normal[2];
+                // Add to all four vertices of the quad
+                let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
+                for &idx in &[idx00, idx10, idx01, idx11] {
+                    normals[idx * 3] += normal[0];
+                    normals[idx * 3 + 1] += normal[1];
+                    normals[idx * 3 + 2] += normal[2];
+                }
+            }
         }
 
         // Normalize normals
@@ -227,12 +258,15 @@ impl Plot3DGrid {
             }
         }
 
+        // For line rendering, face_count represents number of line segments (indices.len() / 2)
+        let line_count = indices.len() / 2;
+
         MeshGeometry {
             vertices,
             indices,
             normals,
             vertex_count: total_points,
-            face_count,
+            face_count: line_count,
             colors: None,
         }
     }
@@ -1813,7 +1847,7 @@ mod tests {
             iblank: None,
         };
 
-        let mesh = grid.to_mesh_geometry();
+        let mesh = grid.to_mesh_geometry(false);
 
         // Check vertex count
         assert_eq!(mesh.vertex_count, 4);
@@ -1824,9 +1858,9 @@ mod tests {
         assert_eq!(mesh.vertices[1], 0.0); // y of vertex 0
         assert_eq!(mesh.vertices[2], 0.0); // z of vertex 0
 
-        // Check that indices were generated
+        // Check that indices were generated for line segments
         assert!(mesh.indices.len() > 0);
-        assert_eq!(mesh.face_count, mesh.indices.len() / 3);
+        assert_eq!(mesh.face_count, mesh.indices.len() / 2); // Line segments, not triangles
 
         // Check normals
         assert_eq!(mesh.normals.len(), 12);
@@ -1854,7 +1888,7 @@ mod tests {
             }
         }
 
-        let mesh = grid.to_mesh_geometry();
+        let mesh = grid.to_mesh_geometry(false);
 
         assert_eq!(mesh.vertex_count, 18);
         assert_eq!(mesh.vertices.len(), 54); // 18 * 3
@@ -1887,7 +1921,7 @@ mod tests {
             iblank: None,
         };
 
-        let mesh = grid.to_mesh_geometry();
+        let mesh = grid.to_mesh_geometry(false);
 
         // Check that normals are normalized (length should be 1 or close to 0)
         for i in (0..mesh.normals.len()).step_by(3) {
@@ -1916,7 +1950,7 @@ mod tests {
             iblank: None,
         };
 
-        let mesh = grid.to_mesh_geometry();
+        let mesh = grid.to_mesh_geometry(false);
 
         // Check that coordinates are preserved in vertices
         for i in 0..4 {
@@ -1924,6 +1958,49 @@ mod tests {
             assert_eq!(mesh.vertices[i * 3 + 1], coords[i]);
             assert_eq!(mesh.vertices[i * 3 + 2], coords[i]);
         }
+    }
+
+    #[test]
+    fn test_mesh_geometry_iblank_filtering() {
+        // Create a 3x3x1 grid with some blanked points
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 1 },
+            x_coords: vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+            y_coords: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            z_coords: vec![0.0; 9],
+            // Blank the center point (index 4) and corner (index 8)
+            iblank: Some(vec![1, 1, 1, 1, 0, 1, 1, 1, 0]),
+        };
+
+        // Without respecting iblank, should have 4 quads (2x2 grid = 4 quads)
+        let mesh_no_blank = grid.to_mesh_geometry(false);
+        assert_eq!(mesh_no_blank.face_count, 16); // 4 quads * 4 edges = 16 line segments
+
+        // With respecting iblank, should have fewer quads (those with blanked corners are excluded)
+        let mesh_with_blank = grid.to_mesh_geometry(true);
+        // All 4 quads touch at least one blanked point (center or corner), so should have 0 quads
+        assert_eq!(mesh_with_blank.face_count, 0);
+    }
+
+    #[test]
+    fn test_mesh_geometry_iblank_partial_blanking() {
+        // Create a 3x3x1 grid with only one corner blanked
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 1 },
+            x_coords: vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+            y_coords: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            z_coords: vec![0.0; 9],
+            // Blank only the top-right corner (index 8)
+            iblank: Some(vec![1, 1, 1, 1, 1, 1, 1, 1, 0]),
+        };
+
+        // Without iblank: 4 quads
+        let mesh_no_blank = grid.to_mesh_geometry(false);
+        assert_eq!(mesh_no_blank.face_count, 16); // 4 quads * 4 edges
+
+        // With iblank: should lose 1 quad (top-right quad that uses point 8)
+        let mesh_with_blank = grid.to_mesh_geometry(true);
+        assert_eq!(mesh_with_blank.face_count, 12); // 3 quads * 4 edges
     }
 
     #[test]

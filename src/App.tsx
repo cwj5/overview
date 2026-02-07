@@ -68,7 +68,13 @@ function App() {
   const [selectedGridId, setSelectedGridId] = useState<string | null>(null);
   const [isolateSelected, setIsolateSelected] = useState(false);
   const [hasSolution, setHasSolution] = useState(false);
+  const [ignoreIblank, setIgnoreIblank] = useState(false);
   const [_currentScalarField, setCurrentScalarField] = useState<ScalarField>('density');
+
+  // Check if any grid has IBLANK data
+  const hasIblankData = useMemo(() => {
+    return grids.some((grid) => grid.grid.iblank !== null && grid.grid.iblank !== undefined);
+  }, [grids]);
 
   useEffect(() => {
     const setupMenu = async () => {
@@ -83,13 +89,27 @@ function App() {
           },
         });
 
+        const ignoreIblankItem = await MenuItem.new({
+          id: "ignore-iblank",
+          text: "Ignore IBLANK",
+          enabled: hasIblankData,
+          action: () => {
+            setIgnoreIblank((prev) => !prev);
+          },
+        });
+
         const fileSubmenu = await Submenu.new({
           text: "File",
           items: [aboutItem],
         });
 
+        const viewSubmenu = await Submenu.new({
+          text: "View",
+          items: [ignoreIblankItem],
+        });
+
         const menu = await Menu.new({
-          items: [fileSubmenu],
+          items: [fileSubmenu, viewSubmenu],
         });
 
         await menu.setAsAppMenu();
@@ -99,7 +119,14 @@ function App() {
     };
 
     setupMenu();
-  }, []);
+  }, [hasIblankData]);
+
+  // Reset ignoreIblank when IBLANK data is no longer available
+  useEffect(() => {
+    if (!hasIblankData && ignoreIblank) {
+      setIgnoreIblank(false);
+    }
+  }, [hasIblankData, ignoreIblank]);
 
   const gridTree = useMemo(() => groupGridsByFile(grids), [grids]);
   const selectedGrid = useMemo(
@@ -471,7 +498,7 @@ function App() {
           </aside>
 
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            <Viewer3D grids={grids} selectedGridId={selectedGridId} isolateSelected={isolateSelected} />
+            <Viewer3D grids={grids} selectedGridId={selectedGridId} isolateSelected={isolateSelected} ignoreIblank={ignoreIblank} />
           </div>
         </div>
         <LogViewer isOpen={showLogs} onToggle={setShowLogs} />

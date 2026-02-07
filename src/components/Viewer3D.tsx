@@ -20,16 +20,15 @@ interface Viewer3DProps {
     grids: GridItem[];
     selectedGridId: string | null;
     isolateSelected: boolean;
+    ignoreIblank: boolean;
 }
 
 function MeshRenderer({
     meshGeometry,
-    wireframe,
     color,
     dimmed,
 }: {
     meshGeometry: MeshGeometry;
-    wireframe: boolean;
     color: string;
     dimmed: boolean;
 }) {
@@ -38,10 +37,6 @@ function MeshRenderer({
         geo.setAttribute(
             'position',
             new BufferAttribute(new Float32Array(meshGeometry.vertices), 3)
-        );
-        geo.setAttribute(
-            'normal',
-            new BufferAttribute(new Float32Array(meshGeometry.normals), 3)
         );
 
         // Add vertex colors if available
@@ -60,20 +55,18 @@ function MeshRenderer({
     const hasColors = meshGeometry.colors && meshGeometry.colors.length > 0;
 
     return (
-        <mesh geometry={geometry}>
-            <meshStandardMaterial
+        <lineSegments geometry={geometry}>
+            <lineBasicMaterial
                 color={hasColors ? 'white' : color}
                 vertexColors={hasColors}
-                wireframe={wireframe}
                 transparent={dimmed}
                 opacity={dimmed ? 0.35 : 1}
             />
-        </mesh>
+        </lineSegments>
     );
 }
 
-export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Viewer3DProps) {
-    const [wireframe, setWireframe] = useState(true);
+export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignoreIblank }: Viewer3DProps) {
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
@@ -126,7 +119,10 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                         z_coords: Array.from(gridItem.grid.z_coords),
                     };
 
-                    const mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', { grid: cleanGrid });
+                    const mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
+                        grid: cleanGrid,
+                        respect_iblank: !ignoreIblank
+                    });
                     return { id: gridItem.id, mesh };
                 } catch (err) {
                     const errorMsg = String(err);
@@ -167,7 +163,7 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
         return () => {
             isCancelled = true;
         };
-    }, [grids]);
+    }, [grids, ignoreIblank]);
 
     const visibleGrids = useMemo(
         () => getVisibleGridItems(grids, selectedGridId, isolateSelected),
@@ -180,11 +176,11 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                 const mesh = meshById[grid.id];
                 if (mesh) {
                     acc.vertices += mesh.vertex_count;
-                    acc.faces += mesh.face_count;
+                    acc.edges += mesh.face_count;
                 }
                 return acc;
             },
-            { vertices: 0, faces: 0 }
+            { vertices: 0, edges: 0 }
         );
     }, [meshById, visibleGrids]);
 
@@ -207,7 +203,6 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                         <MeshRenderer
                             key={gridItem.id}
                             meshGeometry={mesh}
-                            wireframe={wireframe}
                             color={gridItem.color}
                             dimmed={dimmed}
                         />
@@ -231,24 +226,15 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected }: Vie
                     zIndex: 10,
                 }}
             >
-                <label>
-                    <input
-                        type="checkbox"
-                        checked={wireframe}
-                        onChange={(e) => setWireframe(e.target.checked)}
-                    />
-                    {' '}Wireframe
-                </label>
-
-                {isLoading && <div style={{ marginTop: '10px' }}>Loading mesh...</div>}
+                {isLoading && <div>Loading mesh...</div>}
 
                 {visibleGrids.length > 0 && (
-                    <div style={{ marginTop: '10px', fontSize: '0.9em' }}>
+                    <div style={{ marginTop: isLoading ? '10px' : '0', fontSize: '0.9em' }}>
                         Visible grids: {visibleGrids.length}
                         <br />
                         Vertices: {stats.vertices}
                         <br />
-                        Faces: {stats.faces}
+                        Edges: {stats.edges}
                     </div>
                 )}
             </div>
