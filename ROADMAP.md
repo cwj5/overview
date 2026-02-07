@@ -11,6 +11,19 @@ This document outlines the future development work needed to create a full-featu
 - Ensure test isolation for shared state
 - Run `cargo test` before committing
 
+## Troubleshooting & Lessons Learned
+
+**Vertex color rendering (wireframe)**
+- Line-based rendering can ignore vertex colors with the default `lineBasicMaterial`. We switched to a custom shader for `lineSegments` so the per-vertex `color` attribute is always used.
+- When vertex colors are present, avoid tinting with a grid ID color; use a neutral base (white) or fully custom shader output.
+
+**Color array integrity**
+- The `colors` array must match the vertex array length (3 floats per vertex). If lengths mismatch, colors should be ignored or regenerated.
+- Some datasets can produce non-finite scalar values (NaN/∞). These must be excluded from min/max and normalization to prevent white/invalid colors.
+
+**Logging in Tauri**
+- `console.log` isn’t visible in Tauri app logs. Use the shared logger so diagnostics show up in log export.
+
 ## Current Status ✅
 
 **✨ Version: 0.2.0 (Multi-Grid Support) - In Progress**

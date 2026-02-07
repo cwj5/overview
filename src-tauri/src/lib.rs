@@ -376,13 +376,6 @@ fn compute_solution_colors(
     let mut mesh = args.grid.to_mesh_geometry(false);
     mesh.colors = Some(colors);
 
-    log_info(&format!(
-        "Computed {} colors for {} vertices using {} scheme",
-        mesh.colors.as_ref().unwrap_or(&Vec::new()).len() / 3,
-        grid_points,
-        args.color_scheme
-    ));
-
     Ok(mesh)
 }
 

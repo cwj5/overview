@@ -1,7 +1,7 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { BufferGeometry, BufferAttribute } from 'three';
+import { BufferGeometry, BufferAttribute, ShaderMaterial } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
 import type { GridItem } from '../types/grids';
@@ -36,6 +36,35 @@ function MeshRenderer({
     color: string;
     dimmed: boolean;
 }) {
+    const vertexColorMaterial = useMemo(() => {
+        return new ShaderMaterial({
+            transparent: true,
+            uniforms: {
+                opacity: { value: 1.0 },
+            },
+            vertexShader: `
+                attribute vec3 color;
+                varying vec3 vColor;
+                void main() {
+                    vColor = color;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float opacity;
+                varying vec3 vColor;
+                void main() {
+                    gl_FragColor = vec4(vColor, opacity);
+                }
+            `,
+        });
+    }, []);
+
+    useEffect(() => {
+        vertexColorMaterial.uniforms.opacity.value = dimmed ? 0.35 : 1.0;
+        vertexColorMaterial.needsUpdate = true;
+    }, [dimmed, vertexColorMaterial]);
+
     const geometry = useMemo(() => {
         const geo = new BufferGeometry();
         geo.setAttribute(
@@ -43,11 +72,38 @@ function MeshRenderer({
             new BufferAttribute(new Float32Array(meshGeometry.vertices), 3)
         );
 
-        // Add vertex colors if available
-        if (meshGeometry.colors) {
+        const colors = meshGeometry.colors;
+        const hasColors = !!colors && colors.length === meshGeometry.vertices.length;
+
+        // Add vertex colors if available and length matches vertices
+        if (hasColors) {
+            let colorArray = colors;
+
+            // Detect 0-255 color data and normalize to 0-1 if needed
+            let maxSample = 0;
+            const sampleCount = Math.min(colors.length, 3000);
+            for (let i = 0; i < sampleCount; i += 1) {
+                const v = colors[i];
+                if (v > maxSample) maxSample = v;
+            }
+
+            if (maxSample > 1.0) {
+                const normalized = new Float32Array(colors.length);
+                for (let i = 0; i < colors.length; i += 1) {
+                    normalized[i] = colors[i] / 255.0;
+                }
+                colorArray = Array.from(normalized);
+                logger.warn('Detected 0-255 color data. Normalizing to 0-1.', 'MeshRenderer');
+            }
+
             geo.setAttribute(
                 'color',
-                new BufferAttribute(new Float32Array(meshGeometry.colors), 3)
+                new BufferAttribute(new Float32Array(colorArray), 3)
+            );
+        } else if (colors && colors.length > 0) {
+            logger.warn(
+                `Color array length (${colors.length}) does not match vertex array length (${meshGeometry.vertices.length}). Ignoring colors.`,
+                'MeshRenderer'
             );
         }
 
@@ -56,16 +112,19 @@ function MeshRenderer({
     }, [meshGeometry]);
 
     // Use vertex colors if available, otherwise use single color
-    const hasColors = meshGeometry.colors && meshGeometry.colors.length > 0;
+    const hasColors = !!meshGeometry.colors && meshGeometry.colors.length === meshGeometry.vertices.length;
 
     return (
         <lineSegments geometry={geometry}>
-            <lineBasicMaterial
-                color={hasColors ? 'white' : color}
-                vertexColors={hasColors}
-                transparent={dimmed}
-                opacity={dimmed ? 0.35 : 1}
-            />
+            {hasColors ? (
+                <primitive object={vertexColorMaterial} attach="material" />
+            ) : (
+                <lineBasicMaterial
+                    color={color}
+                    transparent={dimmed}
+                    opacity={dimmed ? 0.35 : 1}
+                />
+            )}
         </lineSegments>
     );
 }
@@ -113,11 +172,8 @@ export default function Viewer3D({
             : grids.filter((grid) => !meshById[grid.id]);
 
         if (missing.length === 0) {
-            logger.debug(`No missing or regeneration-needed meshes. Total grids: ${grids.length}, Meshes loaded: ${Object.keys(meshById).length}`, 'Viewer3D');
             return;
         }
-
-        logger.info(`Found ${missing.length} meshes to generate/regenerate out of ${grids.length} grids. scalarField=${scalarField}, colorScheme=${colorScheme}`, 'Viewer3D');
 
         let isCancelled = false;
         setError(null);
@@ -150,9 +206,7 @@ export default function Viewer3D({
                     let mesh: MeshGeometry;
 
                     // Use compute_solution_colors if solution data is available AND user selected a field
-                    logger.debug(`Grid ${gridItem.id}: solution=${!!gridItem.solution}, scalarField=${scalarField}`, 'Viewer3D');
                     if (gridItem.solution && scalarField !== 'none') {
-                        logger.info(`[${gridItem.id}] Computing solution colors with field=${scalarField}, scheme=${colorScheme}`, 'Viewer3D');
                         try {
                             mesh = await invoke<MeshGeometry>('compute_solution_colors', {
                                 grid: cleanGrid,
@@ -160,19 +214,16 @@ export default function Viewer3D({
                                 field: scalarField,
                                 colorScheme: colorScheme,
                             });
-                            logger.info(`[${gridItem.id}] compute_solution_colors SUCCESS: ${mesh.vertices.length / 3} verts, ${mesh.indices.length / 2} edges, ${mesh.colors?.length ? mesh.colors.length / 3 : 0} colors`, 'Viewer3D');
                         } catch (invokeErr) {
                             const invokeMsg = String(invokeErr);
                             logger.error(`[${gridItem.id}] compute_solution_colors FAILED: ${invokeMsg}`, 'Viewer3D');
                             throw invokeErr;
                         }
                     } else {
-                        logger.debug(`[${gridItem.id}] Using convert_grid_to_mesh (ignoreIblank=${ignoreIblank})`, 'Viewer3D');
                         mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                             grid: cleanGrid,
                             respect_iblank: !ignoreIblank
                         });
-                        logger.info(`[${gridItem.id}] convert_grid_to_mesh SUCCESS: ${mesh.vertices.length / 3} verts, ${mesh.indices.length / 2} edges`, 'Viewer3D');
                     }
 
                     return { id: gridItem.id, mesh };

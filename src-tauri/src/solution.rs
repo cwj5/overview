@@ -123,6 +123,9 @@ pub fn compute_scalar_field(solution: &Plot3DSolution, field: ScalarField) -> Ve
 
 /// Color mapping function from normalized value [0, 1] to RGB
 pub fn map_value_to_color(value: f32, scheme: &ColorScheme) -> (f32, f32, f32) {
+    if !value.is_finite() {
+        return (0.0, 0.0, 0.0);
+    }
     let v = value.max(0.0).min(1.0);
     match scheme {
         ColorScheme::Viridis => viridis_color(v),
@@ -222,25 +225,47 @@ pub fn compute_colors(values: &[f32], scheme: &ColorScheme) -> Vec<f32> {
         return Vec::new();
     }
 
-    // Find min/max
-    let mut min = values[0];
-    let mut max = values[0];
+    // Find min/max using finite values only
+    let mut min: Option<f32> = None;
+    let mut max: Option<f32> = None;
     for &v in values.iter() {
-        if v < min {
-            min = v;
+        if !v.is_finite() {
+            continue;
         }
-        if v > max {
-            max = v;
-        }
+        min = Some(match min {
+            Some(current) => current.min(v),
+            None => v,
+        });
+        max = Some(match max {
+            Some(current) => current.max(v),
+            None => v,
+        });
     }
 
-    let range = max - min;
-    let range = if range > 0.0 { range } else { 1.0 };
+    let (min, max) = match (min, max) {
+        (Some(min), Some(max)) => (min, max),
+        _ => {
+            // No finite values; return black
+            return vec![0.0; values.len() * 3];
+        }
+    };
+
+    let mut range = max - min;
+    if !range.is_finite() || range <= 0.0 {
+        range = 1.0;
+    }
 
     // Generate colors
     let mut colors = Vec::with_capacity(values.len() * 3);
     for &v in values.iter() {
-        let normalized = (v - min) / range;
+        let mut normalized = if v.is_finite() {
+            (v - min) / range
+        } else {
+            0.0
+        };
+        if !normalized.is_finite() {
+            normalized = 0.0;
+        }
         let (r, g, b) = map_value_to_color(normalized, scheme);
         colors.push(r);
         colors.push(g);
