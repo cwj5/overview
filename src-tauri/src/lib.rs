@@ -25,6 +25,7 @@ use plot3d::{
     read_plot3d_grid_with_metadata, read_plot3d_solution, read_plot3d_solution_ascii, MeshGeometry,
     Plot3DFunction, Plot3DGrid, Plot3DSolution, SolutionFileMetadata,
 };
+use serde::Deserialize;
 use std::cell::RefCell;
 use std::path::Path;
 use tauri::webview::WebviewWindow;
@@ -321,43 +322,65 @@ fn convert_grid_to_mesh(
     Ok(mesh)
 }
 
+#[derive(Deserialize)]
+struct ComputeSolutionColorsArgs {
+    grid: Plot3DGrid,
+    solution: Plot3DSolution,
+    field: String,
+    #[serde(alias = "colorScheme", alias = "color_scheme")]
+    color_scheme: String,
+}
+
 /// Compute scalar field colors for a grid with solution data
 #[tauri::command]
 fn compute_solution_colors(
     grid: Plot3DGrid,
     solution: Plot3DSolution,
     field: String,
+    color_scheme: String,
 ) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, compute_scalar_field, ScalarField};
+    use solution::{compute_colors, compute_scalar_field, ColorScheme, ScalarField};
+
+    let args = ComputeSolutionColorsArgs {
+        grid,
+        solution,
+        field,
+        color_scheme,
+    };
 
     // Parse field type
-    let field_enum =
-        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+    let field_enum = ScalarField::from_str(&args.field)
+        .ok_or_else(|| format!("Unknown scalar field: {}", args.field))?;
+
+    // Parse color scheme
+    let scheme = ColorScheme::from_str(&args.color_scheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", args.color_scheme))?;
 
     // Validate solution matches grid
-    let grid_points = grid.total_points();
-    if solution.rho.len() != grid_points {
+    let grid_points = args.grid.total_points();
+    if args.solution.rho.len() != grid_points {
         return Err(format!(
             "Solution points {} != grid points {}",
-            solution.rho.len(),
+            args.solution.rho.len(),
             grid_points
         ));
     }
 
     // Compute the scalar field values
-    let values = compute_scalar_field(&solution, field_enum);
+    let values = compute_scalar_field(&args.solution, field_enum);
 
-    // Generate colors from scalar values
-    let colors = compute_colors(&values);
+    // Generate colors from scalar values using the specified scheme
+    let colors = compute_colors(&values, &scheme);
 
     // Create mesh geometry (don't respect iblank for solution visualization)
-    let mut mesh = grid.to_mesh_geometry(false);
+    let mut mesh = args.grid.to_mesh_geometry(false);
     mesh.colors = Some(colors);
 
     log_info(&format!(
-        "Computed {} colors for {} vertices",
+        "Computed {} colors for {} vertices using {} scheme",
         mesh.colors.as_ref().unwrap_or(&Vec::new()).len() / 3,
-        grid_points
+        grid_points,
+        args.color_scheme
     ));
 
     Ok(mesh)

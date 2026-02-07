@@ -13,7 +13,7 @@ interface SolutionViewerProps {
 }
 
 export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchemeChange }: SolutionViewerProps) {
-    const [selectedField, setSelectedField] = useState<ScalarField>('density');
+    const [selectedField, setSelectedField] = useState<ScalarField>('none');
     const [colorScheme, setColorScheme] = useState<ColorScheme>('viridis');
     const [fieldStats, setFieldStats] = useState<{ min: number, max: number, mean: number, stdDev: number } | null>(null);
 
@@ -21,7 +21,7 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
 
     // Compute field stats when selection changes
     useEffect(() => {
-        if (!hasSolution || !selectedGrid?.solution) {
+        if (!hasSolution || !selectedGrid?.solution || selectedField === 'none') {
             setFieldStats(null);
             return;
         }
@@ -123,7 +123,7 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
                 </select>
             </div>
 
-            {fieldStats && (
+            {fieldStats && selectedField !== 'none' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <ColorLegend
                         min={fieldStats.min}

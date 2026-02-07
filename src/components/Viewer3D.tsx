@@ -1,11 +1,12 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { BufferGeometry, BufferAttribute } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
 import type { GridItem } from '../types/grids';
 import type { ColorScheme } from '../utils/colorMapping';
+import type { ScalarField } from '../utils/solutionData';
 import { getVisibleGridItems } from '../utils/gridUtils';
 
 interface MeshGeometry {
@@ -22,6 +23,7 @@ interface Viewer3DProps {
     selectedGridId: string | null;
     isolateSelected: boolean;
     ignoreIblank: boolean;
+    scalarField?: ScalarField;
     colorScheme?: ColorScheme;
 }
 
@@ -68,15 +70,21 @@ function MeshRenderer({
     );
 }
 
-export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignoreIblank, colorScheme: _colorScheme = 'viridis' }: Viewer3DProps) {
-    // _colorScheme will be used when we implement solution visualization in 3D
-    // For now it's passed through for future use
+export default function Viewer3D({
+    grids,
+    selectedGridId,
+    isolateSelected,
+    ignoreIblank,
+    scalarField = 'none',
+    colorScheme = 'viridis'
+}: Viewer3DProps) {
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
 
     type MeshResult = { id: string; mesh: MeshGeometry } | { id: string; error: string };
 
+    // Clear meshes when grids change
     useEffect(() => {
         if (grids.length === 0) {
             setMeshById({});
@@ -85,15 +93,31 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignor
         }
     }, [grids.length]);
 
+    const lastColorKeyRef = useRef<string>('');
+
+    // Generate or regenerate meshes as needed
+    // When field/scheme changes, regenerate grids with solutions
     useEffect(() => {
         if (grids.length === 0) {
             return;
         }
 
-        const missing = grids.filter((grid) => !meshById[grid.id]);
+        const currentColorKey = `${scalarField}|${colorScheme}`;
+        const shouldRecolor = lastColorKeyRef.current !== currentColorKey;
+
+        // Determine which grids need to be regenerated
+        // 1. On color/field change: regenerate all grids to avoid stale colors
+        // 2. Otherwise: only grids without any mesh
+        const missing = shouldRecolor
+            ? grids
+            : grids.filter((grid) => !meshById[grid.id]);
+
         if (missing.length === 0) {
+            logger.debug(`No missing or regeneration-needed meshes. Total grids: ${grids.length}, Meshes loaded: ${Object.keys(meshById).length}`, 'Viewer3D');
             return;
         }
+
+        logger.info(`Found ${missing.length} meshes to generate/regenerate out of ${grids.length} grids. scalarField=${scalarField}, colorScheme=${colorScheme}`, 'Viewer3D');
 
         let isCancelled = false;
         setError(null);
@@ -123,14 +147,38 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignor
                         z_coords: Array.from(gridItem.grid.z_coords),
                     };
 
-                    const mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
-                        grid: cleanGrid,
-                        respect_iblank: !ignoreIblank
-                    });
+                    let mesh: MeshGeometry;
+
+                    // Use compute_solution_colors if solution data is available AND user selected a field
+                    logger.debug(`Grid ${gridItem.id}: solution=${!!gridItem.solution}, scalarField=${scalarField}`, 'Viewer3D');
+                    if (gridItem.solution && scalarField !== 'none') {
+                        logger.info(`[${gridItem.id}] Computing solution colors with field=${scalarField}, scheme=${colorScheme}`, 'Viewer3D');
+                        try {
+                            mesh = await invoke<MeshGeometry>('compute_solution_colors', {
+                                grid: cleanGrid,
+                                solution: gridItem.solution,
+                                field: scalarField,
+                                colorScheme: colorScheme,
+                            });
+                            logger.info(`[${gridItem.id}] compute_solution_colors SUCCESS: ${mesh.vertices.length / 3} verts, ${mesh.indices.length / 2} edges, ${mesh.colors?.length ? mesh.colors.length / 3 : 0} colors`, 'Viewer3D');
+                        } catch (invokeErr) {
+                            const invokeMsg = String(invokeErr);
+                            logger.error(`[${gridItem.id}] compute_solution_colors FAILED: ${invokeMsg}`, 'Viewer3D');
+                            throw invokeErr;
+                        }
+                    } else {
+                        logger.debug(`[${gridItem.id}] Using convert_grid_to_mesh (ignoreIblank=${ignoreIblank})`, 'Viewer3D');
+                        mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
+                            grid: cleanGrid,
+                            respect_iblank: !ignoreIblank
+                        });
+                        logger.info(`[${gridItem.id}] convert_grid_to_mesh SUCCESS: ${mesh.vertices.length / 3} verts, ${mesh.indices.length / 2} edges`, 'Viewer3D');
+                    }
+
                     return { id: gridItem.id, mesh };
                 } catch (err) {
                     const errorMsg = String(err);
-                    logger.error(`Failed to convert grid ${gridItem.id}: ${errorMsg}`, 'Viewer3D');
+                    logger.error(`Grid ${gridItem.id} FAILED: ${errorMsg}`, 'Viewer3D');
                     return { id: gridItem.id, error: errorMsg };
                 }
             })
@@ -138,6 +186,8 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignor
             if (isCancelled) {
                 return;
             }
+
+            lastColorKeyRef.current = currentColorKey;
 
             const errors = results.filter((result) => "error" in result) as { id: string; error: string }[];
             if (errors.length > 0) {
@@ -167,7 +217,7 @@ export default function Viewer3D({ grids, selectedGridId, isolateSelected, ignor
         return () => {
             isCancelled = true;
         };
-    }, [grids, ignoreIblank]);
+    }, [grids, ignoreIblank, scalarField, colorScheme, meshById]);
 
     const visibleGrids = useMemo(
         () => getVisibleGridItems(grids, selectedGridId, isolateSelected),

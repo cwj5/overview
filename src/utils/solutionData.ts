@@ -9,7 +9,7 @@ import type { Plot3DSolution } from "../types/plot3d";
 /**
  * Supported scalar fields for visualization
  */
-export type ScalarField = 'density' | 'velocity_magnitude' | 'momentum_x' | 'momentum_y' | 'momentum_z' | 'pressure' | 'energy';
+export type ScalarField = 'none' | 'density' | 'velocity_magnitude' | 'momentum_x' | 'momentum_y' | 'momentum_z' | 'pressure' | 'energy';
 
 export interface ScalarFieldInfo {
     field: ScalarField;
@@ -19,6 +19,12 @@ export interface ScalarFieldInfo {
 }
 
 export const SCALAR_FIELDS: ScalarFieldInfo[] = [
+    {
+        field: 'none',
+        name: 'Grid ID',
+        unit: '',
+        description: 'Color by grid number (no solution visualization)'
+    },
     {
         field: 'density',
         name: 'Density',
@@ -71,6 +77,10 @@ export function computeScalarField(solution: Plot3DSolution, field: ScalarField)
     const result = new Float32Array(totalPoints);
 
     switch (field) {
+        case 'none':
+            // Return zeros for grid ID mode
+            return new Float32Array(totalPoints);
+
         case 'density':
             return new Float32Array(solution.rho);
 

@@ -1,6 +1,29 @@
 /// Solution data visualization and computation functions
 use crate::plot3d::Plot3DSolution;
 
+/// Color scheme types for visualization
+#[derive(Debug, Clone)]
+pub enum ColorScheme {
+    Viridis,
+    Turbo,
+    Rainbow,
+    Hot,
+    Grayscale,
+}
+
+impl ColorScheme {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "viridis" => Some(ColorScheme::Viridis),
+            "turbo" => Some(ColorScheme::Turbo),
+            "rainbow" => Some(ColorScheme::Rainbow),
+            "hot" => Some(ColorScheme::Hot),
+            "grayscale" => Some(ColorScheme::Grayscale),
+            _ => None,
+        }
+    }
+}
+
 /// Scalar field types
 #[derive(Debug, Clone)]
 pub enum ScalarField {
@@ -99,10 +122,18 @@ pub fn compute_scalar_field(solution: &Plot3DSolution, field: ScalarField) -> Ve
 }
 
 /// Color mapping function from normalized value [0, 1] to RGB
-pub fn map_value_to_color(value: f32) -> (f32, f32, f32) {
-    // Viridis colormap approximation
+pub fn map_value_to_color(value: f32, scheme: &ColorScheme) -> (f32, f32, f32) {
     let v = value.max(0.0).min(1.0);
+    match scheme {
+        ColorScheme::Viridis => viridis_color(v),
+        ColorScheme::Turbo => turbo_color(v),
+        ColorScheme::Rainbow => rainbow_color(v),
+        ColorScheme::Hot => hot_color(v),
+        ColorScheme::Grayscale => (v, v, v),
+    }
+}
 
+fn viridis_color(v: f32) -> (f32, f32, f32) {
     let lut = [
         (0.267004, 0.004874, 0.329415),
         (0.282623, 0.140461, 0.469470),
@@ -116,14 +147,11 @@ pub fn map_value_to_color(value: f32) -> (f32, f32, f32) {
         (0.741388, 0.873449, 0.149561),
         (0.993248, 0.906157, 0.143936),
     ];
-
     let idx = (v * (lut.len() - 1) as f32).floor() as usize;
     let t = (v * (lut.len() - 1) as f32) - idx as f32;
     let next_idx = (idx + 1).min(lut.len() - 1);
-
     let (r1, g1, b1) = lut[idx];
     let (r2, g2, b2) = lut[next_idx];
-
     (
         r1 * (1.0 - t) + r2 * t,
         g1 * (1.0 - t) + g2 * t,
@@ -131,8 +159,65 @@ pub fn map_value_to_color(value: f32) -> (f32, f32, f32) {
     )
 }
 
+fn turbo_color(v: f32) -> (f32, f32, f32) {
+    let lut = [
+        (0.18995, 0.07176, 0.23217),
+        (0.22112, 0.15223, 0.42558),
+        (0.25109, 0.28492, 0.69300),
+        (0.27314, 0.35926, 0.81156),
+        (0.28356, 0.44127, 0.91328),
+        (0.27533, 0.54206, 0.97080),
+        (0.23695, 0.66296, 0.94520),
+        (0.22137, 0.77823, 0.81336),
+        (0.36705, 0.87628, 0.59638),
+        (0.66136, 0.93715, 0.34489),
+        (0.95310, 0.91825, 0.13803),
+    ];
+    let idx = (v * (lut.len() - 1) as f32).floor() as usize;
+    let t = (v * (lut.len() - 1) as f32) - idx as f32;
+    let next_idx = (idx + 1).min(lut.len() - 1);
+    let (r1, g1, b1) = lut[idx];
+    let (r2, g2, b2) = lut[next_idx];
+    (
+        r1 * (1.0 - t) + r2 * t,
+        g1 * (1.0 - t) + g2 * t,
+        b1 * (1.0 - t) + b2 * t,
+    )
+}
+
+fn rainbow_color(v: f32) -> (f32, f32, f32) {
+    let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
+    if v < 0.2 {
+        r = 1.0;
+        g = v / 0.2;
+    } else if v < 0.4 {
+        r = 1.0 - (v - 0.2) / 0.2;
+        g = 1.0;
+    } else if v < 0.6 {
+        g = 1.0;
+        b = (v - 0.4) / 0.2;
+    } else if v < 0.8 {
+        g = 1.0 - (v - 0.6) / 0.2;
+        b = 1.0;
+    } else {
+        r = (v - 0.8) / 0.2;
+        b = 1.0;
+    }
+    (r, g, b)
+}
+
+fn hot_color(v: f32) -> (f32, f32, f32) {
+    if v < 0.33 {
+        (v / 0.33, 0.0, 0.0)
+    } else if v < 0.66 {
+        (1.0, (v - 0.33) / 0.33, 0.0)
+    } else {
+        (1.0, 1.0, (v - 0.66) / 0.34)
+    }
+}
+
 /// Compute vertex colors for a scalar field
-pub fn compute_colors(values: &[f32]) -> Vec<f32> {
+pub fn compute_colors(values: &[f32], scheme: &ColorScheme) -> Vec<f32> {
     if values.is_empty() {
         return Vec::new();
     }
@@ -156,7 +241,7 @@ pub fn compute_colors(values: &[f32]) -> Vec<f32> {
     let mut colors = Vec::with_capacity(values.len() * 3);
     for &v in values.iter() {
         let normalized = (v - min) / range;
-        let (r, g, b) = map_value_to_color(normalized);
+        let (r, g, b) = map_value_to_color(normalized, scheme);
         colors.push(r);
         colors.push(g);
         colors.push(b);
@@ -413,12 +498,12 @@ mod tests {
     #[test]
     fn test_map_value_to_color_bounds() {
         // Test clamping
-        let (r, g, b) = map_value_to_color(-0.5);
+        let (r, g, b) = map_value_to_color(-0.5, &ColorScheme::Viridis);
         assert!(r >= 0.0 && r <= 1.0);
         assert!(g >= 0.0 && g <= 1.0);
         assert!(b >= 0.0 && b <= 1.0);
 
-        let (r, g, b) = map_value_to_color(1.5);
+        let (r, g, b) = map_value_to_color(1.5, &ColorScheme::Viridis);
         assert!(r >= 0.0 && r <= 1.0);
         assert!(g >= 0.0 && g <= 1.0);
         assert!(b >= 0.0 && b <= 1.0);
@@ -427,8 +512,8 @@ mod tests {
     #[test]
     fn test_map_value_to_color_range() {
         // Test typical values
-        let (r0, g0, b0) = map_value_to_color(0.0);
-        let (r1, g1, b1) = map_value_to_color(1.0);
+        let (r0, g0, b0) = map_value_to_color(0.0, &ColorScheme::Viridis);
+        let (r1, g1, b1) = map_value_to_color(1.0, &ColorScheme::Viridis);
 
         // Colors should be different at extremes
         assert!(
@@ -441,7 +526,7 @@ mod tests {
     fn test_compute_colors() {
         let solution = create_test_solution(4, false);
         let field_values = compute_scalar_field(&solution, ScalarField::Density);
-        let colors = compute_colors(&field_values);
+        let colors = compute_colors(&field_values, &ColorScheme::Viridis);
 
         // Should have 3 color components (RGB) per point
         assert_eq!(colors.len(), 4 * 3);
@@ -455,7 +540,7 @@ mod tests {
     #[test]
     fn test_compute_colors_empty() {
         let values: Vec<f32> = vec![];
-        let colors = compute_colors(&values);
+        let colors = compute_colors(&values, &ColorScheme::Viridis);
         assert_eq!(colors.len(), 0);
     }
 }

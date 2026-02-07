@@ -70,7 +70,7 @@ function App() {
   const [isolateSelected, setIsolateSelected] = useState(false);
   const [hasSolution, setHasSolution] = useState(false);
   const [ignoreIblank, setIgnoreIblank] = useState(false);
-  const [_currentScalarField, setCurrentScalarField] = useState<ScalarField>('density');
+  const [currentScalarField, setCurrentScalarField] = useState<ScalarField>('none');
   const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
 
   // Check if any grid has IBLANK data
@@ -506,6 +506,7 @@ function App() {
               selectedGridId={selectedGridId}
               isolateSelected={isolateSelected}
               ignoreIblank={ignoreIblank}
+              scalarField={currentScalarField}
               colorScheme={currentColorScheme}
             />
           </div>
