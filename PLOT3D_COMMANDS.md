@@ -1,0 +1,426 @@
+# PLOT3D Command Reference
+
+This document catalogs the command options and features from NASA's original PLOT3D visualization software (Walatka et al., 1990). This serves as a reference for feature implementation in Mehu.
+
+## Reference
+NASA Technical Memorandum 101067: "PLOT3D User's Manual"  
+https://ntrs.nasa.gov/api/citations/19900013774/downloads/19900013774.pdf
+
+---
+
+## Command Categories
+
+### 1. Display Commands
+
+Commands that control what type of visualization is shown:
+
+#### `GRID` - Grid Display
+- Display computational mesh structure
+- Show grid lines (I, J, K constant lines)
+- Wireframe representation of computational domain
+- Options for grid line density/spacing
+
+#### `CONT` - Contour Plots
+- Generate contour lines of scalar quantities
+- 2D contours on surfaces or planes
+- Contour line labeling
+- Customizable contour levels (automatic or manual)
+- Flood-filled contours (colored regions between levels)
+
+#### `VECT` - Vector Plots
+- Visualize vector fields (velocity, momentum, etc.)
+- Arrow glyphs showing magnitude and direction
+- Vector scaling controls
+- Vector density/sampling options
+- Color by vector magnitude
+
+#### `PART` - Particle Traces
+- Release massless particles in flow field
+- Streamline tracing (forward/backward)
+- Pathlines and streaklines
+- Particle injection controls (rake, point, surface)
+- Time integration parameters
+
+#### `SURF` - Surface Plots
+- 3D surface rendering of grids
+- Elevation/carpet plots
+- Color mapping to scalar values
+- Surface normal computation
+- Hidden surface removal
+
+#### `RAKE` - Particle/Vector Rakes
+- Linear arrangement of particles or vectors
+- Rake positioning in 3D space
+- Number and spacing of particles/vectors
+- Multiple rake support
+
+### 2. View Control Commands
+
+Commands for camera and viewport manipulation:
+
+#### `VIEW` - Viewing Parameters
+- Azimuth angle (rotation around vertical axis)
+- Elevation angle (rotation from horizontal plane)
+- Zoom/magnification factor
+- Eye distance from target
+- Look-at point (view center)
+- Up vector orientation
+
+#### `PERS` - Perspective Mode
+- Toggle perspective vs orthographic projection
+- Field of view angle for perspective
+- Perspective depth cues
+
+#### `ROTA` - Rotation Controls
+- Interactive rotation about axes
+- Rotation center point
+- Incremental rotation angles
+- Continuous rotation/animation
+
+#### `SCAL` - Scaling Options
+- Uniform scaling (overall size)
+- Non-uniform scaling (X, Y, Z independent)
+- Automatic fit-to-window
+- Aspect ratio controls
+
+#### `WIND` - Window/Viewport
+- Viewport dimensions and position
+- Multiple viewport support (split screen)
+- Window borders and titles
+- Aspect ratio locking
+
+### 3. Variable Selection Commands
+
+Commands for choosing what data to visualize:
+
+#### `VARS` - Variable Selection
+Select from flow variables:
+- **Primitive Variables:**
+  - Density (ρ)
+  - Velocity components (u, v, w)
+  - Pressure (p)
+  - Temperature (T)
+  - Energy (e)
+
+- **Derived Variables:**
+  - Mach number
+  - Total pressure
+  - Total temperature
+  - Pressure coefficient (Cp)
+  - Velocity magnitude
+  - Speed of sound
+
+#### `FUNC` - Function Definition
+- Create custom functions from primitive variables
+- Mathematical operations: +, -, *, /, ^
+- Trigonometric functions
+- Conditional expressions
+- Spatial derivatives
+- Access to all 74 built-in functions (see Section 7)
+
+### 4. Grid Operations Commands
+
+Commands for manipulating and selecting grid regions:
+
+#### `ZONE` - Zone/Block Selection
+- Select which computational blocks to display
+- Multi-block CFD support
+- Zone visibility toggles
+- Zone highlighting and labeling
+
+#### `PLAN` - Plane Extraction
+- Extract 2D planes from 3D grids
+- I=constant, J=constant, K=constant planes
+- Multiple plane selection
+- Plane positioning (index value)
+- Interpolated planes between grid lines
+
+#### `CLIP` - Clipping Planes
+- Define arbitrary clipping planes
+- Boolean operations (union, intersection)
+- Clip away portions of domain
+- Inside/outside selection
+- Clipping plane visualization
+
+#### `BLAN` - Blanking Operations
+- Use IBLANK arrays from grid files
+- Manual blanking regions
+- Blanking by value ranges
+- Boolean blanking operations
+- Blanking visualization (ghosting)
+
+### 5. Output and Animation Commands
+
+#### `HARD` - Hardcopy Output
+- Generate output files for printing
+- PostScript format
+- Vector vs raster output
+- Resolution settings
+- Color vs black & white
+
+#### `FRAM` - Frame Control
+- Animation frame sequencing
+- Frame rate control
+- Frame capture for movie creation
+- Keyframe animation
+- Time stepping through unsteady data
+
+#### `DUMP` - Data Output
+- Export processed data
+- Extract plane data
+- Save function evaluations
+- Export in various formats
+- Coordinate data output
+
+### 6. Color and Appearance Commands
+
+#### `COLOR` - Color Mapping
+- Color scheme selection (rainbow, grayscale, etc.)
+- Color bar/legend display
+- Value range mapping (min/max)
+- Discrete vs continuous colors
+- Color inversion
+
+#### `LIGHT` - Lighting Control
+- Light source positioning
+- Ambient, diffuse, specular components
+- Multiple light sources
+- Shadows (optional)
+- Shininess and material properties
+
+#### `LINE` - Line Attributes
+- Line width/thickness
+- Line style (solid, dashed, dotted)
+- Line color
+- Anti-aliasing options
+
+### 7. Built-in Functions (74 Total)
+
+The original PLOT3D included 74 built-in functions for data analysis. Categories include:
+
+#### **Coordinate Functions (Functions 1-9)**
+- Cartesian coordinates (X, Y, Z)
+- Cylindrical coordinates (R, θ, Z)
+- Spherical coordinates
+- Grid indices (I, J, K)
+
+#### **Flow Variables (Functions 10-20)**
+- Density (RHO)
+- Velocity components (U, V, W)
+- Velocity magnitude (VMAG)
+- Pressure (P)
+- Temperature (T)
+- Mach number (MACH)
+- Total pressure (PT)
+- Total temperature (TT)
+- Sound speed (A)
+
+#### **Pressure Coefficients (Functions 21-25)**
+- Static pressure coefficient (CP)
+- Total pressure coefficient (CPT)
+- Compressibility corrections
+- Dynamic pressure
+
+#### **Momentum and Energy (Functions 26-30)**
+- Momentum components (ρu, ρv, ρw)
+- Total energy (ρe)
+- Kinetic energy
+- Internal energy
+- Enthalpy (H), total enthalpy (HT)
+
+#### **Derivatives - First Order (Functions 31-45)**
+Partial derivatives with respect to X, Y, Z:
+- ∂u/∂x, ∂u/∂y, ∂u/∂z
+- ∂v/∂x, ∂v/∂y, ∂v/∂z  
+- ∂w/∂x, ∂w/∂y, ∂w/∂z
+- ∂p/∂x, ∂p/∂y, ∂p/∂z
+- ∂T/∂x, ∂T/∂y, ∂T/∂z
+
+#### **Vorticity (Functions 46-48)**
+- Vorticity components (ωx, ωy, ωz)
+- Vorticity magnitude (|ω|)
+- Helicity
+
+#### **Strain Rate (Functions 49-54)**
+- Strain rate tensor components
+- Shear strain rates
+- Volumetric strain rate
+- Strain rate magnitude
+
+#### **Turbulence Quantities (Functions 55-60)**
+- Turbulent kinetic energy
+- Dissipation rate
+- Eddy viscosity
+- y+ (wall distance)
+- Skin friction coefficient
+
+#### **Geometric Functions (Functions 61-68)**
+- Grid metrics (∂x/∂ξ, ∂y/∂η, ∂z/∂ζ, etc.)
+- Jacobian determinant
+- Cell volumes
+- Surface areas
+- Grid quality metrics
+
+#### **Special Functions (Functions 69-74)**
+- Reynolds number (local)
+- Peclet number
+- Entropy
+- Total enthalpy
+- Stream function
+- Vector potential components
+
+### 8. Analysis and Probe Commands
+
+#### `PROB` - Point Probe
+- Query values at specific points
+- Interpolation in cell
+- Display all variables at point
+- Coordinate readout
+
+#### `INTE` - Integration
+- Surface integrals (flux, force, moment)
+- Volume integrals
+- Line integrals
+- Circulation and vorticity flux
+
+#### `EXTR` - Extrema Finding
+- Find minimum/maximum values
+- Locate critical points
+- Saddle points
+- Stagnation points
+
+### 9. Interactive Controls
+
+#### `MOUS` - Mouse Controls
+- Interactive rotation (click-drag)
+- Pan (shift-drag)
+- Zoom (wheel or drag)
+- Point selection
+- Region selection
+
+#### `MENU` - Menu System
+- Hierarchical command menus
+- Keyboard shortcuts
+- Command history
+- Macro recording
+
+#### `HELP` - Online Help
+- Command documentation
+- Function reference
+- Example workflows
+- Context-sensitive help
+
+### 10. Command Files and Batch Processing
+
+One of PLOT3D's powerful features was the ability to save command sequences to files for later replay and batch processing. This enables:
+
+#### **Command File Format**
+```
+# PLOT3D Command File
+# Comments start with #
+
+# File loading
+LOAD GRID grid.xyz
+LOAD SOLUTION solution.q
+
+# Visualization setup
+ZONE 1
+VARS MACH
+COLOR RAINBOW
+
+# View configuration
+VIEW AZIMUTH 45 ELEVATION 30 ZOOM 1.5
+
+# Display options
+GRID ON
+SURF ON
+CONT ON LEVELS 10
+
+# Output
+HARD OUTPUT image.ps COLOR
+
+# Animation frames (if time-varying data)
+FRAM 1 TO 100 STEP 1
+  DUMP FRAME frame_%04d.tiff
+END
+```
+
+#### **Use Cases**
+1. **Reproducibility**: Save exact visualization settings used in analysis
+2. **Batch Processing**: Run same visualization on multiple datasets
+3. **Collaboration**: Share visualization configurations with team members
+4. **Documentation**: Record analysis workflows for reports/papers
+5. **Automation**: Process unsteady solutions through time automatically
+6. **Quality Control**: Consistent visualizations across multiple runs
+
+#### **Command File Features**
+- Comments (lines starting with #)
+- Variable substitution (for file paths, parameters)
+- Conditional execution (IF/ELSE blocks)
+- Looping (FOR loops over time steps or zones)
+- Conditional logic
+- Error handling and logging directives
+
+#### **Recording vs. Manual Creation**
+- **Record Mode**: UI tracks all user actions and saves as command file
+- **Manual Creation**: Directly write command files in text editor
+- **Hybrid**: Edit and replay, modifying commands as needed
+
+#### **Batch Processing Workflow**
+```
+mehu --batch command_file.plot3d
+```
+- Execute commands sequentially without UI
+- Generate all output files
+- Log all operations
+- Return exit code indicating success/failure
+
+---
+
+## Implementation Priority for Mehu
+
+Based on the original PLOT3D capabilities, here's a suggested implementation priority:
+
+### High Priority (Core Visualization)
+1. ✅ `GRID` - Grid display (wireframe) - **Completed**
+2. ✅ `VIEW` - View controls - **Completed** (orbit controls)
+3. ✅ `SURF` - Surface rendering - **Completed** (shaded mode)
+4. ✅ `ZONE` - Multi-grid selection - **Completed**
+5. ✅ `VARS` - Variable selection - **Completed** (basic)
+6. ✅ `COLOR` - Color mapping - **Completed** (multiple schemes)
+7. `PLAN` - Plane extraction
+8. `CONT` - Contour plots
+
+### Medium Priority (Enhanced Features)
+9. `VECT` - Vector plots
+10. `PART` - Particle traces/streamlines
+11. `CLIP` - Clipping planes
+12. `BLAN` - Blanking support
+13. `FUNC` - Custom functions (74 built-in functions)
+14. `LIGHT` - Lighting controls
+15. `PROB` - Point probe/query
+
+### Lower Priority (Advanced Features)
+16. `RAKE` - Particle rakes
+17. `FRAM` - Animation/time stepping
+18. `INTE` - Integration tools
+19. `EXTR` - Extrema finding
+20. `HARD` - Export/hardcopy
+21. `DUMP` - Data export
+
+---
+
+## Notes on Modern Implementation
+
+While replicating PLOT3D's capabilities, Mehu can modernize the interface:
+
+- **Original PLOT3D**: Text-based command-line interface
+- **Mehu Approach**: GUI with panels, buttons, and interactive 3D controls
+
+- **Original PLOT3D**: Sequential command execution
+- **Mehu Approach**: Real-time interactive manipulation
+
+- **Original PLOT3D**: Limited graphics hardware (1990s)
+- **Mehu Approach**: Modern GPU acceleration via WebGL/Three.js
+
+The goal is to preserve PLOT3D's powerful analysis capabilities while providing a modern, intuitive user experience.

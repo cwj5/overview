@@ -296,6 +296,13 @@ Research and implement PLOT3D's 74 built-in functions:
    - 3D model export (OBJ/STL)
    - Session save/load (remember loaded files & settings)
 
+9. **Command Files & Batch Processing** (Phase 5.3)
+   - Record interactive operations as command files
+   - Load and replay command files
+   - Batch processing mode (CLI: `mehu --batch command_file.plot3d`)
+   - Command file format with comments, loops, conditionals
+   - Enable reproducible workflows and automation
+
 ## Technical Debt and Refactoring
 
 ### Code Quality
