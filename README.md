@@ -21,9 +21,23 @@ A modern, cross-platform application for visualizing CFD (Computational Fluid Dy
 
 ## Prerequisites
 
-- Node.js (v18 or later)
+- Node.js (v20 or later)
 - Rust (latest stable)
 - npm
+
+### System Requirements for Pre-built Binaries
+
+**macOS**: 
+- macOS 11.0 or later
+- Intel (x86_64) or Apple Silicon (aarch64)
+
+**Linux**:
+- glibc 2.35 or later (Ubuntu 22.04+, Fedora 36+, Debian 12+, Rocky Linux 9+)
+- AppImage format (no installation required, just make executable and run)
+
+**Windows**:
+- Windows 10 or later
+- MSI installer
 
 ## Getting Started
 
@@ -67,7 +81,14 @@ mehu/
 - Manages large mesh data (million+ points)
 - Provides Tauri commands for file operations
 
-## PLOT3D Format
+## Building for Distribution
+
+Automated builds are handled via GitHub Actions. Binaries are built for:
+- **macOS**: Both Intel and Apple Silicon architectures in one .app bundle
+- **Linux**: AppImage (no installation needed, portable executable)
+- **Windows**: MSI installer
+
+Builds run automatically on push to `main` branch and tagged releases. Artifacts are available in the GitHub Actions tab.
 
 PLOT3D is a NASA-developed format for storing CFD grid and solution data. For more information, see the [PLOT3D manual](https://ntrs.nasa.gov/api/citations/19900013774/downloads/19900013774.pdf).
 
