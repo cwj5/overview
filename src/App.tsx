@@ -18,6 +18,7 @@ import { Menu, MenuItem, Submenu, CheckMenuItem, PredefinedMenuItem } from "@tau
 import Viewer3D from "./components/Viewer3D";
 import { LogViewer } from "./components/LogViewer";
 import { SolutionViewer } from "./components/SolutionViewer";
+import { LoadingIndicator } from "./components/LoadingIndicator";
 import { logger } from "./utils/logger";
 import { groupGridsByFile } from "./utils/gridUtils";
 import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
@@ -174,6 +175,30 @@ function App() {
     () => grids.some(grid => grid.solution),
     [grids]
   );
+
+  // Wrapper for color scheme changes to show loading indicator
+  const handleColorSchemeChange = (scheme: ColorScheme) => {
+    setCurrentColorScheme(scheme);
+  };
+
+  // Wrapper for scalar field changes to show loading indicator
+  const handleScalarFieldChange = (field: ScalarField) => {
+    setCurrentScalarField(field);
+  };
+
+  // Called when user starts interacting with dropdowns
+  const handleLoadingStart = () => {
+    setLoading(true);
+  };
+
+  // Callback from Viewer3D when it's done loading
+  const handleViewer3DLoadingChange = (isLoading: boolean) => {
+    // Only turn off loading if Viewer3D says it's done
+    // (don't turn it back on since it might be turning off between tasks)
+    if (!isLoading) {
+      setLoading(false);
+    }
+  };
 
   async function loadFiles() {
     try {
@@ -404,8 +429,9 @@ function App() {
                   <div>
                     <SolutionViewer
                       selectedGrid={anyGridHasSolution ? (grids.find(g => g.solution) || grids[0]) : null}
-                      onScalarFieldChange={setCurrentScalarField}
-                      onColorSchemeChange={setCurrentColorScheme}
+                      onScalarFieldChange={handleScalarFieldChange}
+                      onColorSchemeChange={handleColorSchemeChange}
+                      onLoadingStart={handleLoadingStart}
                     />
                   </div>
                 )}
@@ -590,11 +616,13 @@ function App() {
               colorScheme={currentColorScheme}
               showWireframe={showWireframe}
               shadingMode={shadingMode}
+              onLoadingChange={handleViewer3DLoadingChange}
             />
           </div>
         </div>
         <LogViewer isOpen={showLogs} onToggle={setShowLogs} />
       </main>
+      <LoadingIndicator isLoading={loading} message="Processing files..." />
     </div>
   );
 }

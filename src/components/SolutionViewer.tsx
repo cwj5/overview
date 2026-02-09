@@ -10,9 +10,10 @@ interface SolutionViewerProps {
     selectedGrid: GridItem | null;
     onScalarFieldChange?: (field: ScalarField) => void;
     onColorSchemeChange?: (scheme: ColorScheme) => void;
+    onLoadingStart?: () => void;
 }
 
-export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchemeChange }: SolutionViewerProps) {
+export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchemeChange, onLoadingStart }: SolutionViewerProps) {
     const [selectedField, setSelectedField] = useState<ScalarField>('none');
     const [colorScheme, setColorScheme] = useState<ColorScheme>('viridis');
     const [fieldStats, setFieldStats] = useState<{ min: number, max: number, mean: number, stdDev: number } | null>(null);
@@ -34,12 +35,14 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
 
     const handleFieldChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const field = e.target.value as ScalarField;
+        onLoadingStart?.();
         setSelectedField(field);
         onScalarFieldChange?.(field);
     };
 
     const handleColorSchemeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const scheme = e.target.value as ColorScheme;
+        onLoadingStart?.();
         setColorScheme(scheme);
         onColorSchemeChange?.(scheme);
     };

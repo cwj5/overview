@@ -28,6 +28,7 @@ interface Viewer3DProps {
     colorScheme?: ColorScheme;
     showWireframe?: boolean;
     shadingMode?: 'none' | 'flat' | 'smooth';
+    onLoadingChange?: (isLoading: boolean) => void;
 }
 
 function SolidMeshRenderer({
@@ -279,13 +280,20 @@ export default function Viewer3D({
     scalarField = 'none',
     colorScheme = 'viridis',
     showWireframe = true,
-    shadingMode = 'none'
+    shadingMode = 'none',
+    onLoadingChange
 }: Viewer3DProps) {
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
 
     type MeshResult = { id: string; mesh: MeshGeometry } | { id: string; error: string };
+
+    // Notify parent when loading state changes
+    useEffect(() => {
+        const isLoading = loadingIds.size > 0;
+        onLoadingChange?.(isLoading);
+    }, [loadingIds, onLoadingChange]);
 
     // Clear meshes when grids change
     useEffect(() => {
