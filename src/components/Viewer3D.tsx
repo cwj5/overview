@@ -84,7 +84,7 @@ function SolidMeshRenderer({
                     if (gl_FrontFacing) {
                         diffuse = max(diffuse, 0.7); // Front faces have ambient
                     } else {
-                        diffuse *= 0.05; // Backfaces are nearly black (5% of diffuse)
+                        diffuse *= 0.3; // Backfaces are nearly black (5% of diffuse)
                     }
                     
                     vec3 finalColor = vColor * diffuse;

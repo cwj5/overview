@@ -74,6 +74,7 @@ function App() {
   const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
   const [showWireframe, setShowWireframe] = useState(true);
   const [shadingMode, setShadingMode] = useState<'none' | 'flat' | 'smooth'>('none');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Check if any grid has IBLANK data
   const hasIblankData = useMemo(() => {
@@ -366,192 +367,217 @@ function App() {
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', minHeight: 0 }}>
           <aside
             style={{
-              width: '280px',
+              width: sidebarCollapsed ? '50px' : '280px',
               background: '#0f172a',
               color: '#e2e8f0',
               borderRight: '1px solid #1f2937',
               display: 'flex',
               flexDirection: 'column',
-              padding: '12px',
+              padding: sidebarCollapsed ? '12px 6px' : '12px',
               gap: '12px',
-              overflow: 'auto'
+              overflow: 'auto',
+              transition: 'width 0.3s ease'
             }}
           >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Grids</strong>
-              <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                {fileMetadata ? `${fileMetadata.gridCount} grid(s) loaded` : 'No grids loaded'}
-              </div>
-            </div>
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#cbd5e1',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '16px',
+                height: '32px'
+              }}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {sidebarCollapsed ? '→' : '←'}
+            </button>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
-                <input
-                  type="checkbox"
-                  checked={isolateSelected}
-                  onChange={(e) => setIsolateSelected(e.target.checked)}
-                  disabled={selectedGridIds.length === 0}
-                />
-                Isolate selected
-              </label>
-              <button
-                onClick={() => {
-                  setGrids((prev) => prev.map((grid) => ({ ...grid, visible: true })));
-                  setIsolateSelected(false);
-                  setSelectedGridIds([]);
-                }}
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  background: '#1d4ed8',
-                  border: 'none',
-                  color: 'white',
-                  borderRadius: '6px'
-                }}
-              >
-                Clear selection
-              </button>
-            </div>
+            {!sidebarCollapsed && (
+              <>
+                {grids.length > 0 && (
+                  <div>
+                    <SolutionViewer
+                      selectedGrid={anyGridHasSolution ? (grids.find(g => g.solution) || grids[0]) : null}
+                      onScalarFieldChange={setCurrentScalarField}
+                      onColorSchemeChange={setCurrentColorScheme}
+                    />
+                  </div>
+                )}
 
-            {gridTree.length === 0 ? (
-              <div style={{ fontSize: '12px', color: '#94a3b8' }}>Load a PLOT3D file to view grids.</div>
-            ) : (
-              gridTree.map((group) => {
-                const allVisible = group.grids.every((grid) => grid.visible);
-                return (
-                  <details key={group.filePath} open style={{ background: '#111827', borderRadius: '8px', padding: '8px' }}>
-                    <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <span style={{ fontSize: '13px', fontWeight: 600 }}>{group.fileName}</span>
-                          <span style={{ fontSize: '11px', color: '#94a3b8' }}>{group.grids.length} grid(s)</span>
-                        </div>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#cbd5f5' }}>
-                          <input
-                            type="checkbox"
-                            checked={allVisible}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              setGrids((prev) =>
-                                prev.map((grid) =>
-                                  grid.filePath === group.filePath
-                                    ? { ...grid, visible: checked }
-                                    : grid
-                                )
-                              );
-                            }}
-                          />
-                          All
-                        </label>
-                      </div>
-                    </summary>
-                    <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {group.grids.map((grid) => {
-                        const isSelected = selectedGridIds.includes(grid.id);
-                        return (
-                          <div
-                            key={grid.id}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '6px',
-                              borderRadius: '6px',
-                              background: isSelected ? 'rgba(148, 163, 184, 0.2)' : 'transparent',
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={grid.visible}
-                              onChange={(e) => {
-                                const checked = e.target.checked;
-                                setGrids((prev) =>
-                                  prev.map((item) =>
-                                    item.id === grid.id
-                                      ? { ...item, visible: checked }
-                                      : item
-                                  )
-                                );
-                              }}
-                            />
-                            <button
-                              onClick={() => {
-                                setSelectedGridIds((prev) => {
-                                  // Toggle selection: if already selected, remove it; otherwise add it
-                                  if (prev.includes(grid.id)) {
-                                    return prev.filter(id => id !== grid.id);
-                                  } else {
-                                    return [...prev, grid.id];
-                                  }
-                                });
-                              }}
-                              style={{
-                                flex: 1,
-                                background: 'transparent',
-                                border: 'none',
-                                color: '#e2e8f0',
-                                textAlign: 'left',
-                                padding: 0,
-                                cursor: 'pointer',
-                                fontSize: '12px'
-                              }}
-                            >
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                                <span
-                                  style={{
-                                    width: '10px',
-                                    height: '10px',
-                                    borderRadius: '999px',
-                                    background: grid.color,
-                                    boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.6)'
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Grids</strong>
+                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                    {fileMetadata ? `${fileMetadata.gridCount} grid(s) loaded` : 'No grids loaded'}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                    <input
+                      type="checkbox"
+                      checked={isolateSelected}
+                      onChange={(e) => setIsolateSelected(e.target.checked)}
+                      disabled={selectedGridIds.length === 0}
+                    />
+                    Isolate selected
+                  </label>
+                  <button
+                    onClick={() => {
+                      setGrids((prev) => prev.map((grid) => ({ ...grid, visible: true })));
+                      setIsolateSelected(false);
+                      setSelectedGridIds([]);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      fontSize: '12px',
+                      background: '#1d4ed8',
+                      border: 'none',
+                      color: 'white',
+                      borderRadius: '6px'
+                    }}
+                  >
+                    Clear selection
+                  </button>
+                </div>
+
+                {gridTree.length === 0 ? (
+                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>Load a PLOT3D file to view grids.</div>
+                ) : (
+                  gridTree.map((group) => {
+                    const allVisible = group.grids.every((grid) => grid.visible);
+                    return (
+                      <details key={group.filePath} open style={{ background: '#111827', borderRadius: '8px', padding: '8px' }}>
+                        <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 600 }}>{group.fileName}</span>
+                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>{group.grids.length} grid(s)</span>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#cbd5f5' }}>
+                              <input
+                                type="checkbox"
+                                checked={allVisible}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setGrids((prev) =>
+                                    prev.map((grid) =>
+                                      grid.filePath === group.filePath
+                                        ? { ...grid, visible: checked }
+                                        : grid
+                                    )
+                                  );
+                                }}
+                              />
+                              All
+                            </label>
+                          </div>
+                        </summary>
+                        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {group.grids.map((grid) => {
+                            const isSelected = selectedGridIds.includes(grid.id);
+                            return (
+                              <div
+                                key={grid.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                  padding: '6px',
+                                  borderRadius: '6px',
+                                  background: isSelected ? 'rgba(148, 163, 184, 0.2)' : 'transparent',
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={grid.visible}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setGrids((prev) =>
+                                      prev.map((item) =>
+                                        item.id === grid.id
+                                          ? { ...item, visible: checked }
+                                          : item
+                                      )
+                                    );
                                   }}
                                 />
-                                Grid {grid.gridIndex + 1}
-                                {grid.solution && (
-                                  <span style={{ fontSize: '10px', color: '#10b981' }}>●</span>
-                                )}
-                              </span>
-                            </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedGridIds((prev) => {
+                                      // Toggle selection: if already selected, remove it; otherwise add it
+                                      if (prev.includes(grid.id)) {
+                                        return prev.filter(id => id !== grid.id);
+                                      } else {
+                                        return [...prev, grid.id];
+                                      }
+                                    });
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#e2e8f0',
+                                    textAlign: 'left',
+                                    padding: 0,
+                                    cursor: 'pointer',
+                                    fontSize: '12px'
+                                  }}
+                                >
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                    <span
+                                      style={{
+                                        width: '10px',
+                                        height: '10px',
+                                        borderRadius: '999px',
+                                        background: grid.color,
+                                        boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.6)'
+                                      }}
+                                    />
+                                    Grid {grid.gridIndex + 1}
+                                    {grid.solution && (
+                                      <span style={{ fontSize: '10px', color: '#10b981' }}>●</span>
+                                    )}
+                                  </span>
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    );
+                  })
+                )}
+
+                {selectedGrids.length > 0 && (
+                  <div style={{ marginTop: 'auto', background: '#0b1120', padding: '10px', borderRadius: '8px', fontSize: '12px' }}>
+                    <div style={{ fontWeight: 600, marginBottom: '6px' }}>
+                      Selected {selectedGrids.length > 1 ? `grids (${selectedGrids.length})` : 'grid'}
+                    </div>
+                    {selectedGrids.map((grid, idx) => (
+                      <div key={grid.id} style={{ marginBottom: idx < selectedGrids.length - 1 ? '8px' : '0', paddingBottom: idx < selectedGrids.length - 1 ? '8px' : '0', borderBottom: idx < selectedGrids.length - 1 ? '1px solid #1e293b' : 'none' }}>
+                        <div style={{ color: '#cbd5f5' }}>File: {grid.fileName}</div>
+                        <div style={{ color: '#cbd5f5' }}>Grid: {grid.gridIndex + 1}</div>
+                        <div style={{ color: '#cbd5f5' }}>
+                          Dimensions: {grid.grid.dimensions.i}x{grid.grid.dimensions.j}x{grid.grid.dimensions.k}
+                        </div>
+                        {grid.solution && (
+                          <div style={{ color: '#10b981', marginTop: '4px', fontSize: '11px' }}>
+                            ✓ Solution data loaded
                           </div>
-                        );
-                      })}
-                    </div>
-                  </details>
-                );
-              })
-            )}
-
-            {selectedGrids.length > 0 && (
-              <div style={{ marginTop: 'auto', background: '#0b1120', padding: '10px', borderRadius: '8px', fontSize: '12px' }}>
-                <div style={{ fontWeight: 600, marginBottom: '6px' }}>
-                  Selected {selectedGrids.length > 1 ? `grids (${selectedGrids.length})` : 'grid'}
-                </div>
-                {selectedGrids.map((grid, idx) => (
-                  <div key={grid.id} style={{ marginBottom: idx < selectedGrids.length - 1 ? '8px' : '0', paddingBottom: idx < selectedGrids.length - 1 ? '8px' : '0', borderBottom: idx < selectedGrids.length - 1 ? '1px solid #1e293b' : 'none' }}>
-                    <div style={{ color: '#cbd5f5' }}>File: {grid.fileName}</div>
-                    <div style={{ color: '#cbd5f5' }}>Grid: {grid.gridIndex + 1}</div>
-                    <div style={{ color: '#cbd5f5' }}>
-                      Dimensions: {grid.grid.dimensions.i}x{grid.grid.dimensions.j}x{grid.grid.dimensions.k}
-                    </div>
-                    {grid.solution && (
-                      <div style={{ color: '#10b981', marginTop: '4px', fontSize: '11px' }}>
-                        ✓ Solution data loaded
+                        )}
                       </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
 
-            {anyGridHasSolution && (
-              <div style={{ marginTop: '12px' }}>
-                <SolutionViewer
-                  selectedGrid={grids.find(g => g.solution) || grids[0]}
-                  onScalarFieldChange={setCurrentScalarField}
-                  onColorSchemeChange={setCurrentColorScheme}
-                />
-              </div>
-            )}
           </aside>
 
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>

@@ -44,6 +44,21 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
         onColorSchemeChange?.(scheme);
     };
 
+    if (!selectedGrid) {
+        return (
+            <div style={{
+                padding: '12px',
+                background: '#1f2937',
+                borderRadius: '6px',
+                fontSize: '12px',
+                color: '#94a3b8'
+            }}>
+                <strong style={{ display: 'block', marginBottom: '6px' }}>Solution Visualization</strong>
+                Load a solution file to plot the solution
+            </div>
+        );
+    }
+
     if (!hasSolution) {
         return (
             <div style={{
