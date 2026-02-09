@@ -12,6 +12,7 @@ import { getVisibleGridItems } from '../utils/gridUtils';
 interface MeshGeometry {
     vertices: number[];
     indices: number[];
+    triangle_indices: number[];
     normals: number[];
     vertex_count: number;
     face_count: number;
@@ -20,11 +21,131 @@ interface MeshGeometry {
 
 interface Viewer3DProps {
     grids: GridItem[];
-    selectedGridId: string | null;
+    selectedGridIds: string[];
     isolateSelected: boolean;
     ignoreIblank: boolean;
     scalarField?: ScalarField;
     colorScheme?: ColorScheme;
+    showWireframe?: boolean;
+    shadingMode?: 'none' | 'flat' | 'smooth';
+}
+
+function SolidMeshRenderer({
+    meshGeometry,
+    color,
+    dimmed,
+    flatShading = false,
+}: {
+    meshGeometry: MeshGeometry;
+    color: string;
+    dimmed: boolean;
+    flatShading?: boolean;
+}) {
+    const vertexColorMaterial = useMemo(() => {
+        return new ShaderMaterial({
+            transparent: false,
+            depthWrite: true,
+            depthTest: true,
+            uniforms: {
+                opacity: { value: 1.0 },
+            },
+            vertexShader: `
+                attribute vec3 color;
+                varying vec3 vColor;
+                varying vec3 vNormal;
+                void main() {
+                    vColor = color;
+                    vNormal = normalize(normalMatrix * normal);
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float opacity;
+                varying vec3 vColor;
+                varying vec3 vNormal;
+                void main() {
+                    // Simple diffuse lighting
+                    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
+                    float diffuse = max(dot(vNormal, lightDir), 0.3); // minimum ambient
+                    vec3 finalColor = vColor * diffuse;
+                    gl_FragColor = vec4(finalColor, opacity);
+                }
+            `,
+        });
+    }, []);
+
+    useEffect(() => {
+        vertexColorMaterial.transparent = dimmed;
+        vertexColorMaterial.depthWrite = !dimmed;
+        vertexColorMaterial.uniforms.opacity.value = dimmed ? 0.35 : 1.0;
+        vertexColorMaterial.needsUpdate = true;
+    }, [dimmed, vertexColorMaterial]);
+
+    const geometry = useMemo(() => {
+        const geo = new BufferGeometry();
+        geo.setAttribute(
+            'position',
+            new BufferAttribute(new Float32Array(meshGeometry.vertices), 3)
+        );
+
+        // Add normals for smooth shading
+        geo.setAttribute(
+            'normal',
+            new BufferAttribute(new Float32Array(meshGeometry.normals), 3)
+        );
+
+        const colors = meshGeometry.colors;
+        const hasColors = !!colors && colors.length === meshGeometry.vertices.length;
+
+        // Add vertex colors if available and length matches vertices
+        if (hasColors) {
+            let colorArray = colors;
+
+            // Detect 0-255 color data and normalize to 0-1 if needed
+            let maxSample = 0;
+            const sampleCount = Math.min(colors.length, 3000);
+            for (let i = 0; i < sampleCount; i += 1) {
+                const v = colors[i];
+                if (v > maxSample) maxSample = v;
+            }
+
+            if (maxSample > 1.0) {
+                const normalized = new Float32Array(colors.length);
+                for (let i = 0; i < colors.length; i += 1) {
+                    normalized[i] = colors[i] / 255.0;
+                }
+                colorArray = Array.from(normalized);
+            }
+
+            geo.setAttribute(
+                'color',
+                new BufferAttribute(new Float32Array(colorArray), 3)
+            );
+        }
+
+        geo.setIndex(new BufferAttribute(new Uint32Array(meshGeometry.triangle_indices), 1));
+        return geo;
+    }, [meshGeometry]);
+
+    // Use vertex colors if available, otherwise use single color
+    const hasColors = !!meshGeometry.colors && meshGeometry.colors.length === meshGeometry.vertices.length;
+
+    return (
+        <mesh geometry={geometry}>
+            {hasColors ? (
+                <primitive object={vertexColorMaterial} attach="material" />
+            ) : (
+                <meshStandardMaterial
+                    color={color}
+                    transparent={dimmed}
+                    opacity={dimmed ? 0.35 : 1.0}
+                    flatShading={flatShading}
+                    depthWrite={!dimmed}
+                    depthTest={true}
+                />
+            )}
+        </mesh>
+    );
 }
 
 function MeshRenderer({
@@ -131,11 +252,13 @@ function MeshRenderer({
 
 export default function Viewer3D({
     grids,
-    selectedGridId,
+    selectedGridIds,
     isolateSelected,
     ignoreIblank,
     scalarField = 'none',
-    colorScheme = 'viridis'
+    colorScheme = 'viridis',
+    showWireframe = true,
+    shadingMode = 'none'
 }: Viewer3DProps) {
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
@@ -271,8 +394,8 @@ export default function Viewer3D({
     }, [grids, ignoreIblank, scalarField, colorScheme, meshById]);
 
     const visibleGrids = useMemo(
-        () => getVisibleGridItems(grids, selectedGridId, isolateSelected),
-        [grids, isolateSelected, selectedGridId]
+        () => getVisibleGridItems(grids, selectedGridIds, isolateSelected),
+        [grids, isolateSelected, selectedGridIds]
     );
 
     const stats = useMemo(() => {
@@ -297,20 +420,43 @@ export default function Viewer3D({
                 <ambientLight intensity={0.5} />
                 <directionalLight position={[10, 10, 5]} intensity={1} />
 
-                {/* Render actual mesh */}
+                {/* Render mesh based on selected mode */}
                 {visibleGrids.map((gridItem) => {
                     const mesh = meshById[gridItem.id];
                     if (!mesh) {
                         return null;
                     }
-                    const dimmed = !!selectedGridId && gridItem.id !== selectedGridId && !isolateSelected;
+                    const dimmed = selectedGridIds.length > 0 && !selectedGridIds.includes(gridItem.id) && !isolateSelected;
+
                     return (
-                        <MeshRenderer
-                            key={gridItem.id}
-                            meshGeometry={mesh}
-                            color={gridItem.color}
-                            dimmed={dimmed}
-                        />
+                        <group key={gridItem.id}>
+                            {/* Render smooth shaded surface */}
+                            {shadingMode === 'smooth' && (
+                                <SolidMeshRenderer
+                                    meshGeometry={mesh}
+                                    color={gridItem.color}
+                                    dimmed={dimmed}
+                                    flatShading={false}
+                                />
+                            )}
+                            {/* Render flat shaded surface */}
+                            {shadingMode === 'flat' && (
+                                <SolidMeshRenderer
+                                    meshGeometry={mesh}
+                                    color={gridItem.color}
+                                    dimmed={dimmed}
+                                    flatShading={true}
+                                />
+                            )}
+                            {/* Render wireframe */}
+                            {showWireframe && (
+                                <MeshRenderer
+                                    meshGeometry={mesh}
+                                    color={gridItem.color}
+                                    dimmed={dimmed}
+                                />
+                            )}
+                        </group>
                     );
                 })}
 

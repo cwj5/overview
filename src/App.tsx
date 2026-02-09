@@ -14,7 +14,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
+import { Menu, MenuItem, Submenu, CheckMenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import Viewer3D from "./components/Viewer3D";
 import { LogViewer } from "./components/LogViewer";
 import { SolutionViewer } from "./components/SolutionViewer";
@@ -66,12 +66,14 @@ function App() {
   const [error, setError] = useState("");
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [showLogs, setShowLogs] = useState(false);
-  const [selectedGridId, setSelectedGridId] = useState<string | null>(null);
+  const [selectedGridIds, setSelectedGridIds] = useState<string[]>([]);
   const [isolateSelected, setIsolateSelected] = useState(false);
   const [hasSolution, setHasSolution] = useState(false);
   const [ignoreIblank, setIgnoreIblank] = useState(false);
   const [currentScalarField, setCurrentScalarField] = useState<ScalarField>('none');
   const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
+  const [showWireframe, setShowWireframe] = useState(true);
+  const [shadingMode, setShadingMode] = useState<'none' | 'flat' | 'smooth'>('none');
 
   // Check if any grid has IBLANK data
   const hasIblankData = useMemo(() => {
@@ -100,6 +102,32 @@ function App() {
           },
         });
 
+        // Wireframe option
+        const wireframeItem = await CheckMenuItem.new({
+          id: "show-wireframe",
+          text: "Wireframe",
+          checked: showWireframe,
+          action: () => setShowWireframe((prev) => !prev),
+        });
+
+        // Separator
+        const separator = await PredefinedMenuItem.new({ item: "Separator" });
+
+        // Shading mode options
+        const flatShadingItem = await CheckMenuItem.new({
+          id: "shading-flat",
+          text: "Flat Shading",
+          checked: shadingMode === 'flat',
+          action: () => setShadingMode(shadingMode === 'flat' ? 'none' : 'flat'),
+        });
+
+        const smoothShadingItem = await CheckMenuItem.new({
+          id: "shading-smooth",
+          text: "Smooth Shading",
+          checked: shadingMode === 'smooth',
+          action: () => setShadingMode(shadingMode === 'smooth' ? 'none' : 'smooth'),
+        });
+
         const fileSubmenu = await Submenu.new({
           text: "File",
           items: [aboutItem],
@@ -107,7 +135,13 @@ function App() {
 
         const viewSubmenu = await Submenu.new({
           text: "View",
-          items: [ignoreIblankItem],
+          items: [
+            ignoreIblankItem,
+            separator,
+            wireframeItem,
+            flatShadingItem,
+            smoothShadingItem,
+          ],
         });
 
         const menu = await Menu.new({
@@ -121,7 +155,7 @@ function App() {
     };
 
     setupMenu();
-  }, [hasIblankData]);
+  }, [hasIblankData, showWireframe, shadingMode]);
 
   // Reset ignoreIblank when IBLANK data is no longer available
   useEffect(() => {
@@ -131,9 +165,13 @@ function App() {
   }, [hasIblankData, ignoreIblank]);
 
   const gridTree = useMemo(() => groupGridsByFile(grids), [grids]);
-  const selectedGrid = useMemo(
-    () => grids.find((grid) => grid.id === selectedGridId) || null,
-    [grids, selectedGridId]
+  const selectedGrids = useMemo(
+    () => grids.filter((grid) => selectedGridIds.includes(grid.id)),
+    [grids, selectedGridIds]
+  );
+  const anyGridHasSolution = useMemo(
+    () => grids.some(grid => grid.solution),
+    [grids]
   );
 
   async function loadFiles() {
@@ -185,7 +223,7 @@ function App() {
       }
 
       setGrids(allGrids);
-      setSelectedGridId(allGrids[0]?.id ?? null);
+      setSelectedGridIds([]);
       setIsolateSelected(false);
       setHasSolution(false);
 
@@ -352,7 +390,7 @@ function App() {
                   type="checkbox"
                   checked={isolateSelected}
                   onChange={(e) => setIsolateSelected(e.target.checked)}
-                  disabled={!selectedGridId}
+                  disabled={selectedGridIds.length === 0}
                 />
                 Isolate selected
               </label>
@@ -360,6 +398,7 @@ function App() {
                 onClick={() => {
                   setGrids((prev) => prev.map((grid) => ({ ...grid, visible: true })));
                   setIsolateSelected(false);
+                  setSelectedGridIds([]);
                 }}
                 style={{
                   padding: '6px 10px',
@@ -370,7 +409,7 @@ function App() {
                   borderRadius: '6px'
                 }}
               >
-                Show all grids
+                Clear selection
               </button>
             </div>
 
@@ -408,7 +447,7 @@ function App() {
                     </summary>
                     <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       {group.grids.map((grid) => {
-                        const isSelected = grid.id === selectedGridId;
+                        const isSelected = selectedGridIds.includes(grid.id);
                         return (
                           <div
                             key={grid.id}
@@ -436,7 +475,16 @@ function App() {
                               }}
                             />
                             <button
-                              onClick={() => setSelectedGridId(grid.id)}
+                              onClick={() => {
+                                setSelectedGridIds((prev) => {
+                                  // Toggle selection: if already selected, remove it; otherwise add it
+                                  if (prev.includes(grid.id)) {
+                                    return prev.filter(id => id !== grid.id);
+                                  } else {
+                                    return [...prev, grid.id];
+                                  }
+                                });
+                              }}
                               style={{
                                 flex: 1,
                                 background: 'transparent',
@@ -473,26 +521,32 @@ function App() {
               })
             )}
 
-            {selectedGrid && (
+            {selectedGrids.length > 0 && (
               <div style={{ marginTop: 'auto', background: '#0b1120', padding: '10px', borderRadius: '8px', fontSize: '12px' }}>
-                <div style={{ fontWeight: 600, marginBottom: '6px' }}>Selected grid</div>
-                <div style={{ color: '#cbd5f5' }}>File: {selectedGrid.fileName}</div>
-                <div style={{ color: '#cbd5f5' }}>Grid: {selectedGrid.gridIndex + 1}</div>
-                <div style={{ color: '#cbd5f5' }}>
-                  Dimensions: {selectedGrid.grid.dimensions.i}x{selectedGrid.grid.dimensions.j}x{selectedGrid.grid.dimensions.k}
+                <div style={{ fontWeight: 600, marginBottom: '6px' }}>
+                  Selected {selectedGrids.length > 1 ? `grids (${selectedGrids.length})` : 'grid'}
                 </div>
-                {selectedGrid.solution && (
-                  <div style={{ color: '#10b981', marginTop: '4px', fontSize: '11px' }}>
-                    ✓ Solution data loaded
+                {selectedGrids.map((grid, idx) => (
+                  <div key={grid.id} style={{ marginBottom: idx < selectedGrids.length - 1 ? '8px' : '0', paddingBottom: idx < selectedGrids.length - 1 ? '8px' : '0', borderBottom: idx < selectedGrids.length - 1 ? '1px solid #1e293b' : 'none' }}>
+                    <div style={{ color: '#cbd5f5' }}>File: {grid.fileName}</div>
+                    <div style={{ color: '#cbd5f5' }}>Grid: {grid.gridIndex + 1}</div>
+                    <div style={{ color: '#cbd5f5' }}>
+                      Dimensions: {grid.grid.dimensions.i}x{grid.grid.dimensions.j}x{grid.grid.dimensions.k}
+                    </div>
+                    {grid.solution && (
+                      <div style={{ color: '#10b981', marginTop: '4px', fontSize: '11px' }}>
+                        ✓ Solution data loaded
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
             )}
 
-            {selectedGrid && selectedGrid.solution && (
+            {anyGridHasSolution && (
               <div style={{ marginTop: '12px' }}>
                 <SolutionViewer
-                  selectedGrid={selectedGrid}
+                  selectedGrid={grids.find(g => g.solution) || grids[0]}
                   onScalarFieldChange={setCurrentScalarField}
                   onColorSchemeChange={setCurrentColorScheme}
                 />
@@ -503,11 +557,13 @@ function App() {
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             <Viewer3D
               grids={grids}
-              selectedGridId={selectedGridId}
+              selectedGridIds={selectedGridIds}
               isolateSelected={isolateSelected}
               ignoreIblank={ignoreIblank}
               scalarField={currentScalarField}
               colorScheme={currentColorScheme}
+              showWireframe={showWireframe}
+              shadingMode={shadingMode}
             />
           </div>
         </div>

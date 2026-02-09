@@ -46,7 +46,7 @@ describe("getVisibleGridItems", () => {
             makeItem({ id: "fileA::1", gridIndex: 1, visible: false }),
         ];
 
-        const visible = getVisibleGridItems(grids, null, false);
+        const visible = getVisibleGridItems(grids, [], false);
         expect(visible).toHaveLength(1);
         expect(visible[0].id).toBe("fileA::0");
     });
@@ -57,7 +57,7 @@ describe("getVisibleGridItems", () => {
             makeItem({ id: "fileA::1", gridIndex: 1, visible: true }),
         ];
 
-        const visible = getVisibleGridItems(grids, "fileA::1", true);
+        const visible = getVisibleGridItems(grids, ["fileA::1"], true);
         expect(visible).toHaveLength(1);
         expect(visible[0].id).toBe("fileA::1");
     });

@@ -19,12 +19,12 @@ export const groupGridsByFile = (grids: GridItem[]): GridFileGroup[] => {
 
 export const getVisibleGridItems = (
     grids: GridItem[],
-    selectedGridId: string | null,
+    selectedGridIds: string[],
     isolateSelected: boolean
 ): GridItem[] => {
     const visible = grids.filter((grid) => grid.visible);
-    if (!isolateSelected || !selectedGridId) {
+    if (!isolateSelected || selectedGridIds.length === 0) {
         return visible;
     }
-    return visible.filter((grid) => grid.id === selectedGridId);
+    return visible.filter((grid) => selectedGridIds.includes(grid.id));
 };

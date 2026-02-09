@@ -104,11 +104,11 @@ This document outlines the future development work needed to create a full-featu
 ### 2.1 Rendering Modes
 - [x] Wireframe mode
 - [x] Flat shaded surfaces (with computed normals)
-- [ ] Smooth shaded surfaces (vertex normal averaging)
+- [x] Smooth shaded surfaces (vertex normal averaging)
 - [ ] Hidden line removal
-- [ ] Transparent surfaces (partial - dimming implemented)
+- [x] Transparent surfaces (partial - dimming implemented)
 - [ ] Point cloud rendering
-- [ ] Combination modes (wireframe + shaded)
+- [x] Combination modes (wireframe + shaded)
 
 ### 2.2 Solution Data Visualization
 - [x] Scalar field visualization

@@ -96,9 +96,10 @@ pub struct GridDimensions {
 /// Mesh geometry suitable for Three.js rendering
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshGeometry {
-    pub vertices: Vec<f32>, // Flat array of x, y, z coordinates
-    pub indices: Vec<u32>,  // Triangle indices
-    pub normals: Vec<f32>,  // Computed vertex normals
+    pub vertices: Vec<f32>,         // Flat array of x, y, z coordinates
+    pub indices: Vec<u32>,          // Line indices for wireframe rendering
+    pub triangle_indices: Vec<u32>, // Triangle indices for solid rendering
+    pub normals: Vec<f32>,          // Computed vertex normals
     pub vertex_count: usize,
     pub face_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -161,11 +162,12 @@ impl Plot3DGrid {
             vertices.push(self.z_coords[idx]);
         }
 
-        // Generate line indices for quad edges (not triangles)
+        // Generate indices for both wireframe lines and solid triangles
         // For a structured grid, we only render the k=1 surface (k=0 in 0-indexed)
-        let mut indices = Vec::new();
+        let mut line_indices = Vec::new();
+        let mut triangle_indices = Vec::new();
 
-        // Create edges for I-J plane quads (constant K surface) - only k=0
+        // Create geometry for I-J plane quads (constant K surface) - only k=0
         let k_idx = 0;
         for j_idx in 0..j - 1 {
             for i_idx in 0..i - 1 {
@@ -180,21 +182,33 @@ impl Plot3DGrid {
                     continue;
                 }
 
+                // Line indices: 4 edges per quad
                 // Bottom edge (idx00 -> idx10)
-                indices.push(idx00 as u32);
-                indices.push(idx10 as u32);
+                line_indices.push(idx00 as u32);
+                line_indices.push(idx10 as u32);
 
                 // Right edge (idx10 -> idx11)
-                indices.push(idx10 as u32);
-                indices.push(idx11 as u32);
+                line_indices.push(idx10 as u32);
+                line_indices.push(idx11 as u32);
 
                 // Top edge (idx11 -> idx01)
-                indices.push(idx11 as u32);
-                indices.push(idx01 as u32);
+                line_indices.push(idx11 as u32);
+                line_indices.push(idx01 as u32);
 
                 // Left edge (idx01 -> idx00)
-                indices.push(idx01 as u32);
-                indices.push(idx00 as u32);
+                line_indices.push(idx01 as u32);
+                line_indices.push(idx00 as u32);
+
+                // Triangle indices: 2 triangles per quad
+                // First triangle: idx00, idx10, idx11
+                triangle_indices.push(idx00 as u32);
+                triangle_indices.push(idx10 as u32);
+                triangle_indices.push(idx11 as u32);
+
+                // Second triangle: idx00, idx11, idx01
+                triangle_indices.push(idx00 as u32);
+                triangle_indices.push(idx11 as u32);
+                triangle_indices.push(idx01 as u32);
             }
         }
 
@@ -258,15 +272,16 @@ impl Plot3DGrid {
             }
         }
 
-        // For line rendering, face_count represents number of line segments (indices.len() / 2)
-        let line_count = indices.len() / 2;
+        // face_count represents number of triangles
+        let triangle_count = triangle_indices.len() / 3;
 
         MeshGeometry {
             vertices,
-            indices,
+            indices: line_indices,
+            triangle_indices,
             normals,
             vertex_count: total_points,
-            face_count: line_count,
+            face_count: triangle_count,
             colors: None,
         }
     }
