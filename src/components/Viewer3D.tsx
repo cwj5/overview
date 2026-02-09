@@ -1,7 +1,7 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { BufferGeometry, BufferAttribute, ShaderMaterial } from 'three';
+import { BufferGeometry, BufferAttribute, ShaderMaterial, DoubleSide } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
 import type { GridItem } from '../types/grids';
@@ -46,6 +46,7 @@ function SolidMeshRenderer({
             transparent: false,
             depthWrite: true,
             depthTest: true,
+            side: 2, // DoubleSide
             uniforms: {
                 opacity: { value: 1.0 },
             },
@@ -64,9 +65,28 @@ function SolidMeshRenderer({
                 varying vec3 vColor;
                 varying vec3 vNormal;
                 void main() {
-                    // Simple diffuse lighting
-                    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
-                    float diffuse = max(dot(vNormal, lightDir), 0.3); // minimum ambient
+                    // Multiple light sources for better global illumination
+                    vec3 light1 = normalize(vec3(0.5, 0.5, 1.0));
+                    vec3 light2 = normalize(vec3(-0.5, -0.3, 0.8));
+                    vec3 light3 = normalize(vec3(0.0, 1.0, 0.3));
+                    vec3 normal = normalize(vNormal);
+                    
+                    // Check if this is a backface
+                    float facing = gl_FrontFacing ? 1.0 : -1.0;
+                    normal *= facing;
+                    
+                    // Apply lighting from multiple sources
+                    float diffuse1 = max(dot(normal, light1), 0.0);
+                    float diffuse2 = max(dot(normal, light2), 0.0) * 0.5;
+                    float diffuse3 = max(dot(normal, light3), 0.0) * 0.3;
+                    float diffuse = diffuse1 + diffuse2 + diffuse3;
+                    
+                    if (gl_FrontFacing) {
+                        diffuse = max(diffuse, 0.7); // Front faces have ambient
+                    } else {
+                        diffuse *= 0.05; // Backfaces are nearly black (5% of diffuse)
+                    }
+                    
                     vec3 finalColor = vColor * diffuse;
                     gl_FragColor = vec4(finalColor, opacity);
                 }
@@ -142,6 +162,7 @@ function SolidMeshRenderer({
                     flatShading={flatShading}
                     depthWrite={!dimmed}
                     depthTest={true}
+                    side={DoubleSide}
                 />
             )}
         </mesh>
