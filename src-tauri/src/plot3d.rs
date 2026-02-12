@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs::File;
@@ -136,10 +137,17 @@ impl Plot3DGrid {
         (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
     }
 
-    /// Convert PLOT3D grid to Three.js mesh geometry
+    /// Convert PLOT3D grid to Three.js mesh geometry with optional decimation
+    /// decimation_factor: 1 = full resolution, 2 = half, 3 = third, etc.
     /// This creates quad edges for wireframe display (4 edges per quad, no triangulation)
     /// If respect_iblank is true and iblank data exists, points with iblank=0 are excluded
-    pub fn to_mesh_geometry(&self, respect_iblank: bool) -> MeshGeometry {
+    pub fn to_mesh_geometry_decimated(
+        &self,
+        respect_iblank: bool,
+        decimation_factor: usize,
+    ) -> MeshGeometry {
+        let decimation = decimation_factor.max(1); // Ensure at least 1
+
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
         let total_points = self.total_points();
@@ -155,6 +163,7 @@ impl Plot3DGrid {
         };
 
         // Convert coordinates to vertex array (x, y, z interleaved)
+        // Pre-allocate with exact size
         let mut vertices = Vec::with_capacity(total_points * 3);
         for idx in 0..total_points {
             vertices.push(self.x_coords[idx]);
@@ -162,19 +171,32 @@ impl Plot3DGrid {
             vertices.push(self.z_coords[idx]);
         }
 
+        // Calculate decimated grid dimensions
+        let i_decimated = ((i - 1) / decimation) + 1;
+        let j_decimated = ((j - 1) / decimation) + 1;
+
+        // Pre-calculate capacity for indices
+        // Each quad generates: 8 line indices (4 edges * 2 vertices) and 6 triangle indices (2 triangles * 3 vertices)
+        let max_quads = (i_decimated - 1) * (j_decimated - 1);
+        let mut line_indices = Vec::with_capacity(max_quads * 8);
+        let mut triangle_indices = Vec::with_capacity(max_quads * 6);
+
         // Generate indices for both wireframe lines and solid triangles
         // For a structured grid, we only render the k=1 surface (k=0 in 0-indexed)
-        let mut line_indices = Vec::new();
-        let mut triangle_indices = Vec::new();
-
-        // Create geometry for I-J plane quads (constant K surface) - only k=0
         let k_idx = 0;
-        for j_idx in 0..j - 1 {
-            for i_idx in 0..i - 1 {
+
+        for j_step in 0..j_decimated - 1 {
+            let j_idx = j_step * decimation;
+            let j_next = ((j_step + 1) * decimation).min(j - 1);
+
+            for i_step in 0..i_decimated - 1 {
+                let i_idx = i_step * decimation;
+                let i_next = ((i_step + 1) * decimation).min(i - 1);
+
                 let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
-                let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
-                let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
+                let idx10 = Self::linear_index(i_next, j_idx, k_idx, i, j);
+                let idx01 = Self::linear_index(i_idx, j_next, k_idx, i, j);
+                let idx11 = Self::linear_index(i_next, j_next, k_idx, i, j);
 
                 // Skip this quad if any corner is blanked
                 if is_blanked(idx00) || is_blanked(idx10) || is_blanked(idx01) || is_blanked(idx11)
@@ -212,65 +234,78 @@ impl Plot3DGrid {
             }
         }
 
-        // Compute simple vertex normals (averaged from adjacent faces)
-        // For line rendering, normals aren't critical, but we keep them for consistency
+        // Compute simple vertex normals (averaged from adjacent faces) using parallel processing
+        // Pre-allocate normals array
         let mut normals = vec![0.0f32; total_points * 3];
 
-        // For each quad, compute a normal and distribute it to vertices
-        for j_idx in 0..j - 1 {
-            for i_idx in 0..i - 1 {
-                let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                let idx10 = Self::linear_index(i_idx + 1, j_idx, k_idx, i, j);
-                let idx01 = Self::linear_index(i_idx, j_idx + 1, k_idx, i, j);
+        // Collect normal contributions in parallel (need to capture vertices by reference)
+        let vertices_ref = &vertices;
+        let normal_contributions: Vec<_> = (0..j_decimated - 1)
+            .into_par_iter()
+            .flat_map(|j_step| {
+                let j_idx = j_step * decimation;
+                let j_next = ((j_step + 1) * decimation).min(j - 1);
 
-                let v0 = [
-                    vertices[idx00 * 3],
-                    vertices[idx00 * 3 + 1],
-                    vertices[idx00 * 3 + 2],
-                ];
-                let v1 = [
-                    vertices[idx10 * 3],
-                    vertices[idx10 * 3 + 1],
-                    vertices[idx10 * 3 + 2],
-                ];
-                let v2 = [
-                    vertices[idx01 * 3],
-                    vertices[idx01 * 3 + 1],
-                    vertices[idx01 * 3 + 2],
-                ];
+                (0..i_decimated - 1)
+                    .filter_map(move |i_step| {
+                        let i_idx = i_step * decimation;
+                        let i_next = ((i_step + 1) * decimation).min(i - 1);
 
-                // Compute quad normal using cross product
-                let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-                let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+                        let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                        let idx10 = Self::linear_index(i_next, j_idx, k_idx, i, j);
+                        let idx01 = Self::linear_index(i_idx, j_next, k_idx, i, j);
+                        let idx11 = Self::linear_index(i_next, j_next, k_idx, i, j);
 
-                let normal = [
-                    edge1[1] * edge2[2] - edge1[2] * edge2[1],
-                    edge1[2] * edge2[0] - edge1[0] * edge2[2],
-                    edge1[0] * edge2[1] - edge1[1] * edge2[0],
-                ];
+                        let v0 = [
+                            vertices_ref[idx00 * 3],
+                            vertices_ref[idx00 * 3 + 1],
+                            vertices_ref[idx00 * 3 + 2],
+                        ];
+                        let v1 = [
+                            vertices_ref[idx10 * 3],
+                            vertices_ref[idx10 * 3 + 1],
+                            vertices_ref[idx10 * 3 + 2],
+                        ];
+                        let v2 = [
+                            vertices_ref[idx01 * 3],
+                            vertices_ref[idx01 * 3 + 1],
+                            vertices_ref[idx01 * 3 + 2],
+                        ];
 
-                // Add to all four vertices of the quad
-                let idx11 = Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j);
-                for &idx in &[idx00, idx10, idx01, idx11] {
-                    normals[idx * 3] += normal[0];
-                    normals[idx * 3 + 1] += normal[1];
-                    normals[idx * 3 + 2] += normal[2];
-                }
+                        // Compute quad normal using cross product
+                        let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+                        let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+
+                        let normal = [
+                            edge1[1] * edge2[2] - edge1[2] * edge2[1],
+                            edge1[2] * edge2[0] - edge1[0] * edge2[2],
+                            edge1[0] * edge2[1] - edge1[1] * edge2[0],
+                        ];
+
+                        Some(([idx00, idx10, idx01, idx11], normal))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        // Apply normal contributions sequentially
+        for (indices, normal) in normal_contributions {
+            for &idx in &indices {
+                normals[idx * 3] += normal[0];
+                normals[idx * 3 + 1] += normal[1];
+                normals[idx * 3 + 2] += normal[2];
             }
         }
 
-        // Normalize normals
-        for i in (0..normals.len()).step_by(3) {
-            let len = (normals[i] * normals[i]
-                + normals[i + 1] * normals[i + 1]
-                + normals[i + 2] * normals[i + 2])
-                .sqrt();
+        // Normalize normals in parallel
+        normals.par_chunks_mut(3).for_each(|chunk| {
+            let len = (chunk[0] * chunk[0] + chunk[1] * chunk[1] + chunk[2] * chunk[2]).sqrt();
             if len > 0.0 {
-                normals[i] /= len;
-                normals[i + 1] /= len;
-                normals[i + 2] /= len;
+                chunk[0] /= len;
+                chunk[1] /= len;
+                chunk[2] /= len;
             }
-        }
+        });
 
         // face_count represents number of triangles
         let triangle_count = triangle_indices.len() / 3;
@@ -284,6 +319,15 @@ impl Plot3DGrid {
             face_count: triangle_count,
             colors: None,
         }
+    }
+
+    /// Convert PLOT3D grid to Three.js mesh geometry
+    /// This creates quad edges for wireframe display (4 edges per quad, no triangulation)
+    /// If respect_iblank is true and iblank data exists, points with iblank=0 are excluded
+    #[allow(dead_code)]
+    pub fn to_mesh_geometry(&self, respect_iblank: bool) -> MeshGeometry {
+        // Default to no decimation (full resolution)
+        self.to_mesh_geometry_decimated(respect_iblank, 1)
     }
 
     /// Helper function to convert 3D grid index to linear index

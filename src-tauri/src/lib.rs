@@ -317,7 +317,29 @@ fn convert_grid_to_mesh(
         return Err(error_msg);
     }
 
-    let mesh = grid.to_mesh_geometry(respect_iblank.unwrap_or(false));
+    // Auto-detect decimation based on grid size for better performance
+    let i = grid.dimensions.i as usize;
+    let j = grid.dimensions.j as usize;
+    let max_dim = i.max(j);
+
+    let decimation_factor = if max_dim > 1000 {
+        4 // Very large grids: use 1/4 resolution
+    } else if max_dim > 500 {
+        3 // Large grids: use 1/3 resolution
+    } else if max_dim > 250 {
+        2 // Medium grids: use 1/2 resolution
+    } else {
+        1 // Small grids: full resolution
+    };
+
+    if decimation_factor > 1 {
+        log_info(&format!(
+            "Grid size {}x{} - applying {}x decimation for performance",
+            i, j, decimation_factor
+        ));
+    }
+
+    let mesh = grid.to_mesh_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
 
     Ok(mesh)
 }
@@ -372,8 +394,32 @@ fn compute_solution_colors(
     // Generate colors from scalar values using the specified scheme
     let colors = compute_colors(&values, &scheme);
 
+    // Auto-detect decimation based on grid size for better performance
+    let i = args.grid.dimensions.i as usize;
+    let j = args.grid.dimensions.j as usize;
+    let max_dim = i.max(j);
+
+    let decimation_factor = if max_dim > 1000 {
+        4 // Very large grids: use 1/4 resolution
+    } else if max_dim > 500 {
+        3 // Large grids: use 1/3 resolution
+    } else if max_dim > 250 {
+        2 // Medium grids: use 1/2 resolution
+    } else {
+        1 // Small grids: full resolution
+    };
+
+    if decimation_factor > 1 {
+        log_info(&format!(
+            "Solution grid size {}x{} - applying {}x decimation for performance",
+            i, j, decimation_factor
+        ));
+    }
+
     // Create mesh geometry (don't respect iblank for solution visualization)
-    let mut mesh = args.grid.to_mesh_geometry(false);
+    let mut mesh = args
+        .grid
+        .to_mesh_geometry_decimated(false, decimation_factor);
     mesh.colors = Some(colors);
 
     Ok(mesh)

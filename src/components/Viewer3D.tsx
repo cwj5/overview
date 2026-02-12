@@ -145,6 +145,10 @@ function SolidMeshRenderer({
         }
 
         geo.setIndex(new BufferAttribute(new Uint32Array(meshGeometry.triangle_indices), 1));
+
+        // Compute bounding sphere for frustum culling
+        geo.computeBoundingSphere();
+
         return geo;
     }, [meshGeometry]);
 
@@ -152,7 +156,7 @@ function SolidMeshRenderer({
     const hasColors = !!meshGeometry.colors && meshGeometry.colors.length === meshGeometry.vertices.length;
 
     return (
-        <mesh geometry={geometry}>
+        <mesh geometry={geometry} frustumCulled={true}>
             {hasColors ? (
                 <primitive object={vertexColorMaterial} attach="material" />
             ) : (
@@ -251,6 +255,10 @@ function MeshRenderer({
         }
 
         geo.setIndex(new BufferAttribute(new Uint32Array(meshGeometry.indices), 1));
+
+        // Compute bounding sphere for frustum culling
+        geo.computeBoundingSphere();
+
         return geo;
     }, [meshGeometry]);
 
@@ -258,7 +266,7 @@ function MeshRenderer({
     const hasColors = !!meshGeometry.colors && meshGeometry.colors.length === meshGeometry.vertices.length;
 
     return (
-        <lineSegments geometry={geometry}>
+        <lineSegments geometry={geometry} frustumCulled={true}>
             {hasColors ? (
                 <primitive object={vertexColorMaterial} attach="material" />
             ) : (
