@@ -64,6 +64,7 @@ const buildGridItems = (
 function App() {
   const [grids, setGrids] = useState<GridItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("Processing...");
   const [error, setError] = useState("");
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [showLogs, setShowLogs] = useState(false);
@@ -76,6 +77,37 @@ function App() {
   const [showWireframe, setShowWireframe] = useState(true);
   const [shadingMode, setShadingMode] = useState<'none' | 'flat' | 'smooth'>('none');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Debug: Log whenever loading state changes
+  useEffect(() => {
+    logger.info(`Loading state changed to: ${loading}`, 'App');
+  }, [loading]);
+
+  // Listen for loading events from Rust
+  useEffect(() => {
+    const setupListeners = async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+
+      const unlistenStart = await listen<string>('loading-start', (event) => {
+        logger.info(`Rust loading started: ${event.payload}`, 'App');
+        setLoadingMessage(event.payload);
+        setLoading(true);
+      });
+
+      const unlistenEnd = await listen('loading-end', () => {
+        logger.info('Rust loading ended', 'App');
+        setLoading(false);
+        setLoadingMessage("Processing...");
+      });
+
+      return () => {
+        unlistenStart();
+        unlistenEnd();
+      };
+    };
+
+    setupListeners();
+  }, []);
 
   // Check if any grid has IBLANK data
   const hasIblankData = useMemo(() => {
@@ -177,45 +209,54 @@ function App() {
   );
 
   // Wrapper for color scheme changes to show loading indicator
-  const handleColorSchemeChange = (scheme: ColorScheme) => {
+  const handleColorSchemeChange = async (scheme: ColorScheme) => {
+    // Rust will emit loading events
     setCurrentColorScheme(scheme);
   };
 
   // Wrapper for scalar field changes to show loading indicator
-  const handleScalarFieldChange = (field: ScalarField) => {
+  const handleScalarFieldChange = async (field: ScalarField) => {
+    // Rust will emit loading events
     setCurrentScalarField(field);
   };
 
-  // Called when user starts interacting with dropdowns
-  const handleLoadingStart = () => {
-    setLoading(true);
-  };
-
-  // Callback from Viewer3D when it's done loading
-  const handleViewer3DLoadingChange = (isLoading: boolean) => {
-    // Only turn off loading if Viewer3D says it's done
-    // (don't turn it back on since it might be turning off between tasks)
-    if (!isLoading) {
-      setLoading(false);
-    }
+  // Callback from Viewer3D when it's done loading meshes
+  const handleViewer3DLoadingChange = () => {
+    // Viewer3D loading is now controlled by Rust events, ignore this callback
+    logger.debug('Ignoring Viewer3D loading change (controlled by Rust)', 'App');
   };
 
   async function loadFiles() {
     try {
+      // Set loading state and wait for render
+      logger.info('Setting loading state to TRUE', 'App');
+      setLoadingMessage("Opening file dialog...");
       setLoading(true);
       setError("");
+
+      // Use requestAnimationFrame to ensure UI updates before blocking dialog
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      logger.info('About to open file dialog', 'App');
       logger.info("Opening file selection dialog...");
 
       // Open file dialog for selecting one or more files
       const filePaths = await invoke<string[]>("open_multiple_files_dialog");
 
+      logger.info(`File dialog returned with ${filePaths?.length || 0} files`, 'App');
+
       if (!filePaths || filePaths.length === 0) {
+        logger.info('File dialog cancelled, setting loading to FALSE', 'App');
         setLoading(false);
         logger.debug("File dialog cancelled");
         return;
       }
 
       logger.info(`Loading ${filePaths.length} file(s)...`);
+      setLoadingMessage(`Loading ${filePaths.length} file(s)...`);
+
+      // Ensure UI updates
+      await new Promise(resolve => requestAnimationFrame(resolve));
 
       // Try to load each file as a grid, collect successful grids
       const gridResults: { path: string; grids: Plot3DGrid[]; fileName: string }[] = [];
@@ -223,8 +264,11 @@ function App() {
 
       for (const path of filePaths) {
         try {
-          const grids = await invoke<Plot3DGrid[]>("load_plot3d_file", { path });
           const fileName = path.split(/[/\\]/).pop() || path;
+          setLoadingMessage(`Parsing ${fileName}...`);
+          // Ensure message renders
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          const grids = await invoke<Plot3DGrid[]>("load_plot3d_file", { path });
           gridResults.push({ path, grids, fileName });
           logger.info(`Loaded ${grids.length} grid(s) from ${fileName}`);
         } catch (e) {
@@ -237,6 +281,9 @@ function App() {
       if (gridResults.length === 0) {
         throw new Error("No valid grid files found in selection");
       }
+
+      setLoadingMessage("Building grid structures...");
+      await new Promise(resolve => requestAnimationFrame(resolve));
 
       // Build grid items from all loaded grids
       const allGrids: GridItem[] = [];
@@ -255,6 +302,8 @@ function App() {
 
       // Try to load solution files
       if (potentialSolutionPaths.length > 0) {
+        setLoadingMessage("Loading solution data...");
+        await new Promise(resolve => requestAnimationFrame(resolve));
         for (const solPath of potentialSolutionPaths) {
           try {
             // Auto-detect binary or ASCII format and load accordingly
@@ -321,6 +370,7 @@ function App() {
       setError(errorMsg);
       logger.error(errorMsg);
     } finally {
+      logger.info('Finally block: setting loading to FALSE', 'App');
       setLoading(false);
     }
   }
@@ -431,7 +481,6 @@ function App() {
                       selectedGrid={anyGridHasSolution ? (grids.find(g => g.solution) || grids[0]) : null}
                       onScalarFieldChange={handleScalarFieldChange}
                       onColorSchemeChange={handleColorSchemeChange}
-                      onLoadingStart={handleLoadingStart}
                     />
                   </div>
                 )}
@@ -622,7 +671,7 @@ function App() {
         </div>
         <LogViewer isOpen={showLogs} onToggle={setShowLogs} />
       </main>
-      <LoadingIndicator isLoading={loading} message="Processing files..." />
+      <LoadingIndicator isLoading={loading} message={loadingMessage} />
     </div>
   );
 }

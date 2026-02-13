@@ -29,6 +29,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 use std::path::Path;
 use tauri::webview::WebviewWindow;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
@@ -283,7 +284,11 @@ fn load_plot3d_function(path: String) -> Result<Vec<Plot3DFunction>, String> {
 fn convert_grid_to_mesh(
     grid: Plot3DGrid,
     respect_iblank: Option<bool>,
+    window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
+    // Emit loading start event
+    let _ = window.emit("loading-start", "Converting grid to mesh...");
+
     // Validate grid data
     let total_points = grid.total_points();
     if grid.x_coords.len() != total_points {
@@ -341,6 +346,9 @@ fn convert_grid_to_mesh(
 
     let mesh = grid.to_mesh_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
 
+    // Emit loading end event
+    let _ = window.emit("loading-end", ());
+
     Ok(mesh)
 }
 
@@ -360,8 +368,12 @@ fn compute_solution_colors(
     solution: Plot3DSolution,
     field: String,
     color_scheme: String,
+    window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, compute_scalar_field, ColorScheme, ScalarField};
+
+    // Emit loading start event
+    let _ = window.emit("loading-start", format!("Computing {} field...", field));
 
     let args = ComputeSolutionColorsArgs {
         grid,
@@ -421,6 +433,9 @@ fn compute_solution_colors(
         .grid
         .to_mesh_geometry_decimated(false, decimation_factor);
     mesh.colors = Some(colors);
+
+    // Emit loading end event
+    let _ = window.emit("loading-end", ());
 
     Ok(mesh)
 }

@@ -1,4 +1,5 @@
 import './LoadingIndicator.css';
+import { logger } from '../utils/logger';
 
 interface LoadingIndicatorProps {
     isLoading: boolean;
@@ -6,6 +7,9 @@ interface LoadingIndicatorProps {
 }
 
 export function LoadingIndicator({ isLoading, message = 'Loading...' }: LoadingIndicatorProps) {
+    // Debug logging
+    logger.debug(`LoadingIndicator: isLoading=${isLoading}, message="${message}"`, 'LoadingIndicator');
+
     if (!isLoading) return null;
 
     return (
