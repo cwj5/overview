@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { SCALAR_FIELDS, type ScalarField, formatValue, computeScalarField, getFieldStats } from '../utils/solutionData';
+import { useState, useEffect, useRef } from 'react';
+import { SCALAR_FIELDS, type ScalarField, formatValue } from '../utils/solutionData';
 import { type ColorScheme } from '../utils/colorMapping';
 import { ColorLegend } from './ColorLegend';
 import type { GridItem } from '../types/grids';
@@ -16,10 +16,11 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
     const [selectedField, setSelectedField] = useState<ScalarField>('none');
     const [colorScheme, setColorScheme] = useState<ColorScheme>('viridis');
     const [fieldStats, setFieldStats] = useState<{ min: number, max: number, mean: number, stdDev: number } | null>(null);
+    const statsRequestRef = useRef(0);
 
     const hasSolution = selectedGrid?.solution !== undefined;
 
-    // Compute field stats when selection changes
+    // Compute field stats in chunks to keep the UI responsive on large grids
     useEffect(() => {
         if (!hasSolution || !selectedGrid?.solution || selectedField === 'none') {
             setFieldStats(null);
@@ -27,9 +28,104 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
         }
 
         const solution = selectedGrid.solution as Plot3DSolution;
-        const values = computeScalarField(solution, selectedField);
-        const stats = getFieldStats(values);
-        setFieldStats(stats);
+        const requestId = statsRequestRef.current + 1;
+        statsRequestRef.current = requestId;
+        setFieldStats(null);
+
+        const totalPoints = solution.rho.length;
+        if (totalPoints === 0) {
+            setFieldStats({ min: 0, max: 0, mean: 0, stdDev: 0 });
+            return;
+        }
+        const chunkSize = 50000;
+        const defaultGamma = 1.4;
+
+        let min = Number.POSITIVE_INFINITY;
+        let max = Number.NEGATIVE_INFINITY;
+        let sum = 0;
+        let sumSquared = 0;
+        let index = 0;
+
+        const getValue = (i: number): number => {
+            switch (selectedField) {
+                case 'density':
+                    return solution.rho[i];
+                case 'velocity_magnitude': {
+                    const rho = solution.rho[i];
+                    if (rho > 0) {
+                        const u = solution.rhou[i] / rho;
+                        const v = solution.rhov[i] / rho;
+                        const w = solution.rhow[i] / rho;
+                        return Math.sqrt(u * u + v * v + w * w);
+                    }
+                    return 0;
+                }
+                case 'pressure': {
+                    const rho = solution.rho[i];
+                    if (rho > 0) {
+                        const gamma = solution.gamma ? solution.gamma[i] : defaultGamma;
+                        const u = solution.rhou[i] / rho;
+                        const v = solution.rhov[i] / rho;
+                        const w = solution.rhow[i] / rho;
+                        const kinetic = 0.5 * rho * (u * u + v * v + w * w);
+                        const internal = solution.rhoe[i] - kinetic;
+                        return (gamma - 1) * internal;
+                    }
+                    return 0;
+                }
+                case 'momentum_x':
+                    return solution.rhou[i];
+                case 'momentum_y':
+                    return solution.rhov[i];
+                case 'momentum_z':
+                    return solution.rhow[i];
+                case 'energy':
+                    return solution.rhoe[i];
+                default:
+                    return solution.rho[i];
+            }
+        };
+
+        const processChunk = () => {
+            if (statsRequestRef.current !== requestId) {
+                return;
+            }
+
+            const end = Math.min(index + chunkSize, totalPoints);
+            for (let i = index; i < end; i += 1) {
+                const v = getValue(i);
+                if (!Number.isFinite(v)) {
+                    continue;
+                }
+                if (v < min) min = v;
+                if (v > max) max = v;
+                sum += v;
+                sumSquared += v * v;
+            }
+            index = end;
+
+            if (index < totalPoints) {
+                setTimeout(processChunk, 0);
+                return;
+            }
+
+            if (!Number.isFinite(min) || !Number.isFinite(max)) {
+                setFieldStats({ min: 0, max: 0, mean: 0, stdDev: 0 });
+                return;
+            }
+
+            const mean = sum / totalPoints;
+            const variance = Math.max(0, sumSquared / totalPoints - mean * mean);
+            setFieldStats({ min, max, mean, stdDev: Math.sqrt(variance) });
+        };
+
+        setTimeout(processChunk, 0);
+        return () => {
+            // Cancel any in-flight stats computation for stale selections
+            if (statsRequestRef.current === requestId) {
+                statsRequestRef.current += 1;
+            }
+        };
     }, [selectedField, hasSolution, selectedGrid]);
 
     const handleFieldChange = (e: React.ChangeEvent<HTMLSelectElement>) => {

@@ -20,6 +20,7 @@ mod solution;
 mod logger_tests;
 
 use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, LogEntry};
+use once_cell::sync::Lazy;
 use plot3d::{
     get_last_solution_metadata, read_plot3d_function, read_plot3d_grid_ascii,
     read_plot3d_grid_with_metadata, read_plot3d_solution, read_plot3d_solution_ascii, MeshGeometry,
@@ -28,6 +29,7 @@ use plot3d::{
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tauri::webview::WebviewWindow;
 use tauri::Emitter;
 use tauri::Manager;
@@ -36,6 +38,18 @@ use tauri_plugin_dialog::DialogExt;
 // Thread-local storage for solution file metadata
 thread_local! {
     static SOLUTION_METADATA: RefCell<Option<SolutionFileMetadata>> = RefCell::new(None);
+}
+
+static SOLUTION_CACHE: Lazy<Mutex<Vec<Arc<Plot3DSolution>>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+fn cache_solutions(solutions: &[Plot3DSolution]) {
+    let cached: Vec<Arc<Plot3DSolution>> = solutions
+        .iter()
+        .map(|solution| Arc::new(solution.clone()))
+        .collect();
+    if let Ok(mut store) = SOLUTION_CACHE.lock() {
+        *store = cached;
+    }
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -114,6 +128,7 @@ fn load_plot3d_solution(path: String) -> Result<Vec<Plot3DSolution>, String> {
     log_debug(&format!("Loading PLOT3D solution file: {}", path));
     match read_plot3d_solution(&path) {
         Ok(solutions) => {
+            cache_solutions(&solutions);
             // Get the metadata that was set by the reader
             if let Some(metadata) = get_last_solution_metadata() {
                 log_info(&format!(
@@ -143,6 +158,7 @@ fn load_plot3d_solution_ascii(path: String) -> Result<Vec<Plot3DSolution>, Strin
     log_debug(&format!("Loading ASCII PLOT3D solution file: {}", path));
     match read_plot3d_solution_ascii(&path) {
         Ok(solutions) => {
+            cache_solutions(&solutions);
             // Get the metadata that was set by the reader
             if let Some(metadata) = get_last_solution_metadata() {
                 log_info(&format!(
@@ -204,6 +220,7 @@ fn load_plot3d_solution_auto(path: String) -> Result<Vec<Plot3DSolution>, String
     // Try binary format first (more specific format)
     match read_plot3d_solution(&path) {
         Ok(solutions) => {
+            cache_solutions(&solutions);
             // Get the metadata that was set by the reader
             if let Some(metadata) = get_last_solution_metadata() {
                 log_info(&format!(
@@ -224,6 +241,7 @@ fn load_plot3d_solution_auto(path: String) -> Result<Vec<Plot3DSolution>, String
             log_debug(&format!("Binary format failed: {}", binary_err));
             match read_plot3d_solution_ascii(&path) {
                 Ok(solutions) => {
+                    cache_solutions(&solutions);
                     // Get the metadata that was set by the reader
                     if let Some(metadata) = get_last_solution_metadata() {
                         log_info(&format!(
@@ -344,7 +362,8 @@ fn convert_grid_to_mesh(
         ));
     }
 
-    let mesh = grid.to_mesh_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
+    let mesh =
+        grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
 
     // Emit loading end event
     let _ = window.emit("loading-end", ());
@@ -361,6 +380,16 @@ struct ComputeSolutionColorsArgs {
     color_scheme: String,
 }
 
+#[derive(Deserialize)]
+struct ComputeSolutionColorsCachedArgs {
+    grid: Plot3DGrid,
+    #[serde(alias = "gridIndex", alias = "grid_index")]
+    grid_index: usize,
+    field: String,
+    #[serde(alias = "colorScheme", alias = "color_scheme")]
+    color_scheme: String,
+}
+
 /// Compute scalar field colors for a grid with solution data
 #[tauri::command]
 fn compute_solution_colors(
@@ -370,7 +399,7 @@ fn compute_solution_colors(
     color_scheme: String,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, compute_scalar_field, ColorScheme, ScalarField};
+    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
 
     // Emit loading start event
     let _ = window.emit("loading-start", format!("Computing {} field...", field));
@@ -400,12 +429,6 @@ fn compute_solution_colors(
         ));
     }
 
-    // Compute the scalar field values
-    let values = compute_scalar_field(&args.solution, field_enum);
-
-    // Generate colors from scalar values using the specified scheme
-    let colors = compute_colors(&values, &scheme);
-
     // Auto-detect decimation based on grid size for better performance
     let i = args.grid.dimensions.i as usize;
     let j = args.grid.dimensions.j as usize;
@@ -428,16 +451,144 @@ fn compute_solution_colors(
         ));
     }
 
-    // Create mesh geometry (don't respect iblank for solution visualization)
+    // Compute scalar values/colors for surface only
+    let values = compute_scalar_field_surface(&args.solution, field_enum, decimation_factor);
+    let colors = compute_colors(&values, &scheme);
+
+    // Create surface mesh geometry (don't respect iblank for solution visualization)
     let mut mesh = args
         .grid
-        .to_mesh_geometry_decimated(false, decimation_factor);
+        .to_mesh_surface_geometry_decimated(false, decimation_factor);
     mesh.colors = Some(colors);
 
     // Emit loading end event
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
+}
+
+/// Compute scalar field colors using cached solution data
+#[tauri::command]
+fn compute_solution_colors_cached(
+    grid: Plot3DGrid,
+    grid_index: usize,
+    field: String,
+    color_scheme: String,
+    window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
+
+    let _ = window.emit("loading-start", format!("Computing {} field...", field));
+
+    let args = ComputeSolutionColorsCachedArgs {
+        grid,
+        grid_index,
+        field,
+        color_scheme,
+    };
+
+    let field_enum = ScalarField::from_str(&args.field)
+        .ok_or_else(|| format!("Unknown scalar field: {}", args.field))?;
+
+    let scheme = ColorScheme::from_str(&args.color_scheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", args.color_scheme))?;
+
+    let solution = {
+        let store = SOLUTION_CACHE
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = store
+            .iter()
+            .find(|sol| sol.grid_index == args.grid_index)
+            .ok_or_else(|| format!("No cached solution for grid index {}", args.grid_index))?;
+        Arc::clone(cached)
+    };
+
+    let grid_points = args.grid.total_points();
+    if solution.rho.len() != grid_points {
+        return Err(format!(
+            "Solution points {} != grid points {}",
+            solution.rho.len(),
+            grid_points
+        ));
+    }
+
+    let i = args.grid.dimensions.i as usize;
+    let j = args.grid.dimensions.j as usize;
+    let max_dim = i.max(j);
+
+    let decimation_factor = if max_dim > 1000 {
+        4
+    } else if max_dim > 500 {
+        3
+    } else if max_dim > 250 {
+        2
+    } else {
+        1
+    };
+
+    if decimation_factor > 1 {
+        log_info(&format!(
+            "Solution grid size {}x{} - applying {}x decimation for performance",
+            i, j, decimation_factor
+        ));
+    }
+
+    let values = compute_scalar_field_surface(&solution, field_enum, decimation_factor);
+    let colors = compute_colors(&values, &scheme);
+
+    let mut mesh = args
+        .grid
+        .to_mesh_surface_geometry_decimated(false, decimation_factor);
+    mesh.colors = Some(colors);
+
+    let _ = window.emit("loading-end", ());
+
+    Ok(mesh)
+}
+
+/// Compute scalar field colors only using cached solution data
+#[tauri::command]
+fn compute_solution_colors_only_cached(
+    grid_index: usize,
+    field: String,
+    color_scheme: String,
+) -> Result<Vec<f32>, String> {
+    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
+
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+
+    let scheme = ColorScheme::from_str(&color_scheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", color_scheme))?;
+
+    let solution = {
+        let store = SOLUTION_CACHE
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = store
+            .iter()
+            .find(|sol| sol.grid_index == grid_index)
+            .ok_or_else(|| format!("No cached solution for grid index {}", grid_index))?;
+        Arc::clone(cached)
+    };
+
+    let i = solution.dimensions.i as usize;
+    let j = solution.dimensions.j as usize;
+    let max_dim = i.max(j);
+
+    let decimation_factor = if max_dim > 1000 {
+        4
+    } else if max_dim > 500 {
+        3
+    } else if max_dim > 250 {
+        2
+    } else {
+        1
+    };
+
+    let values = compute_scalar_field_surface(&solution, field_enum, decimation_factor);
+    Ok(compute_colors(&values, &scheme))
 }
 
 #[tauri::command]
@@ -546,6 +697,12 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Print frontend debug messages to the terminal
+#[tauri::command]
+fn frontend_log(message: String) {
+    println!("[frontend] {}", message);
+}
+
 /// Open the About window
 #[tauri::command]
 async fn open_about_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -584,6 +741,8 @@ pub fn run() {
             load_plot3d_function,
             convert_grid_to_mesh,
             compute_solution_colors,
+            compute_solution_colors_cached,
+            compute_solution_colors_only_cached,
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,
@@ -592,6 +751,7 @@ pub fn run() {
             export_logs_to_file,
             save_log_file_dialog,
             write_text_file,
+            frontend_log,
             open_about_window,
         ])
         .run(tauri::generate_context!())

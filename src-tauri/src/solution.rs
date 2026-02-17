@@ -52,6 +52,7 @@ impl ScalarField {
 }
 
 /// Compute a scalar field from solution data
+#[allow(dead_code)]
 pub fn compute_scalar_field(solution: &Plot3DSolution, field: ScalarField) -> Vec<f32> {
     let total_points = solution.rho.len();
     let mut result = Vec::with_capacity(total_points);
@@ -119,6 +120,73 @@ pub fn compute_scalar_field(solution: &Plot3DSolution, field: ScalarField) -> Ve
     }
 
     result
+}
+
+/// Compute scalar field for the k=0 surface with optional decimation.
+pub fn compute_scalar_field_surface(
+    solution: &Plot3DSolution,
+    field: ScalarField,
+    decimation_factor: usize,
+) -> Vec<f32> {
+    let decimation = decimation_factor.max(1);
+    let i = solution.dimensions.i as usize;
+    let j = solution.dimensions.j as usize;
+    let k_idx = 0usize;
+
+    let i_decimated = ((i - 1) / decimation) + 1;
+    let j_decimated = ((j - 1) / decimation) + 1;
+
+    let mut values = Vec::with_capacity(i_decimated * j_decimated);
+
+    for j_step in 0..j_decimated {
+        let j_idx = (j_step * decimation).min(j - 1);
+        for i_step in 0..i_decimated {
+            let i_idx = (i_step * decimation).min(i - 1);
+            let idx = k_idx * i * j + j_idx * i + i_idx;
+
+            let value = match field {
+                ScalarField::Density => solution.rho[idx],
+                ScalarField::MomentumX => solution.rhou[idx],
+                ScalarField::MomentumY => solution.rhov[idx],
+                ScalarField::MomentumZ => solution.rhow[idx],
+                ScalarField::Energy => solution.rhoe[idx],
+                ScalarField::VelocityMagnitude => {
+                    let rho = solution.rho[idx];
+                    if rho > 0.0 {
+                        let u = solution.rhou[idx] / rho;
+                        let v = solution.rhov[idx] / rho;
+                        let w = solution.rhow[idx] / rho;
+                        (u * u + v * v + w * w).sqrt()
+                    } else {
+                        0.0
+                    }
+                }
+                ScalarField::Pressure => {
+                    const DEFAULT_GAMMA: f32 = 1.4;
+                    let rho = solution.rho[idx];
+                    if rho > 0.0 {
+                        let gamma = solution
+                            .gamma
+                            .as_ref()
+                            .map(|g| g[idx])
+                            .unwrap_or(DEFAULT_GAMMA);
+                        let u = solution.rhou[idx] / rho;
+                        let v = solution.rhov[idx] / rho;
+                        let w = solution.rhow[idx] / rho;
+                        let kinetic_energy = 0.5 * rho * (u * u + v * v + w * w);
+                        let internal_energy = solution.rhoe[idx] - kinetic_energy;
+                        (gamma - 1.0) * internal_energy
+                    } else {
+                        0.0
+                    }
+                }
+            };
+
+            values.push(value);
+        }
+    }
+
+    values
 }
 
 /// Color mapping function from normalized value [0, 1] to RGB

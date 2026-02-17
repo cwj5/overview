@@ -19,6 +19,13 @@ interface MeshGeometry {
     colors?: number[];
 }
 
+interface SerializableGrid {
+    dimensions: { i: number; j: number; k: number };
+    x_coords: number[];
+    y_coords: number[];
+    z_coords: number[];
+}
+
 interface Viewer3DProps {
     grids: GridItem[];
     selectedGridIds: string[];
@@ -292,31 +299,37 @@ export default function Viewer3D({
     onLoadingChange
 }: Viewer3DProps) {
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
-    const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+    const [loadingById, setLoadingById] = useState<Record<string, number>>({});
     const [error, setError] = useState<string | null>(null);
+    const cleanGridCacheRef = useRef<Record<string, SerializableGrid>>({});
 
     type MeshResult = { id: string; mesh: MeshGeometry } | { id: string; error: string };
 
     // Notify parent when loading state changes
     useEffect(() => {
-        const isLoading = loadingIds.size > 0;
+        const isLoading = Object.keys(loadingById).length > 0;
         onLoadingChange?.(isLoading);
-    }, [loadingIds, onLoadingChange]);
+    }, [loadingById, onLoadingChange]);
 
     // Clear meshes when grids change
     useEffect(() => {
         if (grids.length === 0) {
             setMeshById({});
-            setLoadingIds(new Set());
+            setLoadingById({});
             setError(null);
         }
     }, [grids.length]);
 
     const lastColorKeyRef = useRef<string>('');
+    const requestIdRef = useRef(0);
 
     // Generate or regenerate meshes as needed
     // When field/scheme changes, regenerate grids with solutions
     useEffect(() => {
+        const effectStart = performance.now();
+        void invoke('frontend_log', {
+            message: `[Viewer3D] effect start grids=${grids.length} field=${scalarField} scheme=${colorScheme} ignoreIblank=${ignoreIblank}`
+        });
         if (grids.length === 0) {
             return;
         }
@@ -332,51 +345,66 @@ export default function Viewer3D({
             : grids.filter((grid) => !meshById[grid.id]);
 
         if (missing.length === 0) {
+            void invoke('frontend_log', { message: '[Viewer3D] effect no-op (missing=0)' });
             return;
         }
 
         let isCancelled = false;
+        const requestId = requestIdRef.current + 1;
+        requestIdRef.current = requestId;
         setError(null);
-        setLoadingIds((prev) => {
-            const next = new Set(prev);
-            missing.forEach((grid) => next.add(grid.id));
+        setLoadingById((prev) => {
+            const next = { ...prev };
+            missing.forEach((grid) => {
+                next[grid.id] = requestId;
+            });
             return next;
         });
+
+        const getCleanGrid = async (gridItem: GridItem): Promise<SerializableGrid> => {
+            const cached = cleanGridCacheRef.current[gridItem.id];
+            if (cached) {
+                return cached;
+            }
+            if (!gridItem.grid.x_coords || !gridItem.grid.y_coords || !gridItem.grid.z_coords) {
+                throw new Error(
+                    `Missing coordinate arrays: x:${!!gridItem.grid.x_coords}, y:${!!gridItem.grid.y_coords}, z:${!!gridItem.grid.z_coords}`
+                );
+            }
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const cleanGrid = {
+                dimensions: {
+                    i: gridItem.grid.dimensions.i,
+                    j: gridItem.grid.dimensions.j,
+                    k: gridItem.grid.dimensions.k,
+                },
+                x_coords: Array.from(gridItem.grid.x_coords),
+                y_coords: Array.from(gridItem.grid.y_coords),
+                z_coords: Array.from(gridItem.grid.z_coords),
+            };
+            cleanGridCacheRef.current[gridItem.id] = cleanGrid;
+            return cleanGrid;
+        };
 
         Promise.all(
             missing.map(async (gridItem) => {
                 try {
-                    // Check if coordinate arrays exist before creating clean copy
-                    if (!gridItem.grid.x_coords || !gridItem.grid.y_coords || !gridItem.grid.z_coords) {
-                        throw new Error(`Missing coordinate arrays: x:${!!gridItem.grid.x_coords}, y:${!!gridItem.grid.y_coords}, z:${!!gridItem.grid.z_coords}`);
-                    }
-
-                    // Create a clean copy of the grid data to ensure proper serialization
-                    const cleanGrid = {
-                        dimensions: {
-                            i: gridItem.grid.dimensions.i,
-                            j: gridItem.grid.dimensions.j,
-                            k: gridItem.grid.dimensions.k,
-                        },
-                        x_coords: Array.from(gridItem.grid.x_coords),
-                        y_coords: Array.from(gridItem.grid.y_coords),
-                        z_coords: Array.from(gridItem.grid.z_coords),
-                    };
+                    const gridStart = performance.now();
+                    const cleanGrid = await getCleanGrid(gridItem);
 
                     let mesh: MeshGeometry;
 
-                    // Use compute_solution_colors if solution data is available AND user selected a field
                     if (gridItem.solution && scalarField !== 'none') {
                         try {
-                            mesh = await invoke<MeshGeometry>('compute_solution_colors', {
+                            mesh = await invoke<MeshGeometry>('compute_solution_colors_cached', {
                                 grid: cleanGrid,
-                                solution: gridItem.solution,
+                                gridIndex: gridItem.gridIndex,
                                 field: scalarField,
                                 colorScheme: colorScheme,
                             });
                         } catch (invokeErr) {
                             const invokeMsg = String(invokeErr);
-                            logger.error(`[${gridItem.id}] compute_solution_colors FAILED: ${invokeMsg}`, 'Viewer3D');
+                            logger.error(`[${gridItem.id}] compute_solution_colors_cached FAILED: ${invokeMsg}`, 'Viewer3D');
                             throw invokeErr;
                         }
                     } else {
@@ -386,6 +414,10 @@ export default function Viewer3D({
                         });
                     }
 
+                    void invoke('frontend_log', {
+                        message: `[Viewer3D] grid done id=${gridItem.id} ms=${Math.round(performance.now() - gridStart)}`
+                    });
+
                     return { id: gridItem.id, mesh };
                 } catch (err) {
                     const errorMsg = String(err);
@@ -394,9 +426,13 @@ export default function Viewer3D({
                 }
             })
         ).then((results: MeshResult[]) => {
-            if (isCancelled) {
+            if (isCancelled || requestId !== requestIdRef.current) {
                 return;
             }
+
+            void invoke('frontend_log', {
+                message: `[Viewer3D] effect done ms=${Math.round(performance.now() - effectStart)} results=${results.length}`
+            });
 
             lastColorKeyRef.current = currentColorKey;
 
@@ -418,15 +454,31 @@ export default function Viewer3D({
                 return next;
             });
 
-            setLoadingIds((prev) => {
-                const next = new Set(prev);
-                results.forEach((result) => next.delete(result.id));
+            setLoadingById((prev) => {
+                const next = { ...prev };
+                results.forEach((result) => {
+                    if (next[result.id] === requestId) {
+                        delete next[result.id];
+                    }
+                });
                 return next;
             });
         });
 
         return () => {
             isCancelled = true;
+            setLoadingById((prev) => {
+                const next = { ...prev };
+                missing.forEach((grid) => {
+                    if (next[grid.id] === requestId) {
+                        delete next[grid.id];
+                    }
+                });
+                return next;
+            });
+            void invoke('frontend_log', {
+                message: `[Viewer3D] effect cancelled ms=${Math.round(performance.now() - effectStart)}`
+            });
         };
     }, [grids, ignoreIblank, scalarField, colorScheme, meshById]);
 
@@ -449,7 +501,7 @@ export default function Viewer3D({
         );
     }, [meshById, visibleGrids]);
 
-    const isLoading = loadingIds.size > 0;
+    const isLoading = Object.keys(loadingById).length > 0;
 
     return (
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
