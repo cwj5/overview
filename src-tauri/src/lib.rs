@@ -605,21 +605,6 @@ fn compute_solution_colors_only_cached(
     Ok(compute_colors(&values, &scheme))
 }
 
-#[derive(Deserialize)]
-struct ComputeSolutionColorsSlicedArgs {
-    sliced_grid: Plot3DGrid,
-    original_grid: Plot3DGrid,
-    #[serde(alias = "gridIndex", alias = "grid_index")]
-    grid_index: usize,
-    field: String,
-    #[serde(alias = "colorScheme", alias = "color_scheme")]
-    color_scheme: String,
-    #[serde(alias = "slicePlane", alias = "slice_plane")]
-    slice_plane: String,
-    #[serde(alias = "sliceIndex", alias = "slice_index")]
-    slice_index: u32,
-}
-
 /// Helper function to compute a scalar field value from a single point's solution data
 fn compute_scalar_field_value(solution: &Plot3DSolution, field: solution::ScalarField) -> f32 {
     use solution::ScalarField;

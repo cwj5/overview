@@ -359,7 +359,6 @@ export default function Viewer3D({
         });
 
         const hasSlices = Object.keys(gridSlices).length > 0;
-        const hasMeshes = Object.keys(meshById).length > 0;
 
         // Auto-create default K=1 slices only once when a new grid set is first loaded
         if (!hasSlices && !autoCreatedSlicesRef.current) {
