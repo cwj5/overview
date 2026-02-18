@@ -137,6 +137,135 @@ impl Plot3DGrid {
         (self.dimensions.i as usize) * (self.dimensions.j as usize) * (self.dimensions.k as usize)
     }
 
+    /// Create a cross-sectional slice of the grid
+    /// plane: "I", "J", or "K" specifying which plane constant
+    /// index: the index along that plane (0-based)
+    /// Returns a new 2D grid representing the slice
+    pub fn slice_grid(&self, plane: &str, index: u32) -> Result<Plot3DGrid, String> {
+        let i = self.dimensions.i as usize;
+        let j = self.dimensions.j as usize;
+        let k = self.dimensions.k as usize;
+
+        match plane.to_uppercase().as_str() {
+            "I" => {
+                // Constant I plane: varies in J and K
+                // Return as J x K x 1 so the surface renders at k=0
+                let i_idx = index as usize;
+                if i_idx >= i {
+                    return Err(format!("I index {} out of bounds [0, {})", i_idx, i));
+                }
+
+                let mut x_coords = Vec::with_capacity(j * k);
+                let mut y_coords = Vec::with_capacity(j * k);
+                let mut z_coords = Vec::with_capacity(j * k);
+                let mut iblank_vec = self.iblank.as_ref().map(|_| Vec::with_capacity(j * k));
+
+                // Iterate: for each K, for each J (so data fills in J order first)
+                for k_idx in 0..k {
+                    for j_idx in 0..j {
+                        let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                        x_coords.push(self.x_coords[idx]);
+                        y_coords.push(self.y_coords[idx]);
+                        z_coords.push(self.z_coords[idx]);
+                        if let Some(ref mut iblank) = iblank_vec {
+                            iblank.push(self.iblank.as_ref().map(|ib| ib[idx]).unwrap_or(1));
+                        }
+                    }
+                }
+
+                Ok(Plot3DGrid {
+                    dimensions: GridDimensions {
+                        i: j as u32, // J becomes the new I
+                        j: k as u32, // K becomes the new J
+                        k: 1,        // Surface at k=0
+                    },
+                    x_coords,
+                    y_coords,
+                    z_coords,
+                    iblank: iblank_vec,
+                })
+            }
+            "J" => {
+                // Constant J plane: varies in I and K
+                // Return as I x K x 1 so the surface renders at k=0
+                let j_idx = index as usize;
+                if j_idx >= j {
+                    return Err(format!("J index {} out of bounds [0, {})", j_idx, j));
+                }
+
+                let mut x_coords = Vec::with_capacity(i * k);
+                let mut y_coords = Vec::with_capacity(i * k);
+                let mut z_coords = Vec::with_capacity(i * k);
+                let mut iblank_vec = self.iblank.as_ref().map(|_| Vec::with_capacity(i * k));
+
+                // Iterate: for each K, for each I (so data fills in I order first)
+                for k_idx in 0..k {
+                    for i_idx in 0..i {
+                        let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                        x_coords.push(self.x_coords[idx]);
+                        y_coords.push(self.y_coords[idx]);
+                        z_coords.push(self.z_coords[idx]);
+                        if let Some(ref mut iblank) = iblank_vec {
+                            iblank.push(self.iblank.as_ref().map(|ib| ib[idx]).unwrap_or(1));
+                        }
+                    }
+                }
+
+                Ok(Plot3DGrid {
+                    dimensions: GridDimensions {
+                        i: i as u32,
+                        j: k as u32, // K becomes the new J
+                        k: 1,        // Surface at k=0
+                    },
+                    x_coords,
+                    y_coords,
+                    z_coords,
+                    iblank: iblank_vec,
+                })
+            }
+            "K" => {
+                // Constant K plane: varies in I and J
+                let k_idx = index as usize;
+                if k_idx >= k {
+                    return Err(format!("K index {} out of bounds [0, {})", k_idx, k));
+                }
+
+                let mut x_coords = Vec::with_capacity(i * j);
+                let mut y_coords = Vec::with_capacity(i * j);
+                let mut z_coords = Vec::with_capacity(i * j);
+                let mut iblank_vec = self.iblank.as_ref().map(|_| Vec::with_capacity(i * j));
+
+                for j_idx in 0..j {
+                    for i_idx in 0..i {
+                        let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                        x_coords.push(self.x_coords[idx]);
+                        y_coords.push(self.y_coords[idx]);
+                        z_coords.push(self.z_coords[idx]);
+                        if let Some(ref mut iblank) = iblank_vec {
+                            iblank.push(self.iblank.as_ref().map(|ib| ib[idx]).unwrap_or(1));
+                        }
+                    }
+                }
+
+                Ok(Plot3DGrid {
+                    dimensions: GridDimensions {
+                        i: i as u32,
+                        j: j as u32,
+                        k: 1,
+                    },
+                    x_coords,
+                    y_coords,
+                    z_coords,
+                    iblank: iblank_vec,
+                })
+            }
+            _ => Err(format!(
+                "Invalid plane: {}. Must be 'I', 'J', or 'K'",
+                plane
+            )),
+        }
+    }
+
     /// Convert PLOT3D grid to Three.js mesh geometry with optional decimation
     /// decimation_factor: 1 = full resolution, 2 = half, 3 = third, etc.
     /// This creates quad edges for wireframe display (4 edges per quad, no triangulation)

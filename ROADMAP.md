@@ -141,7 +141,14 @@ This document outlines the future development work needed to create a full-featu
 - [ ] Iso-surfaces for 3D scalar fields
 
 ### 2.3 Advanced Visualization Features
-- [ ] Cross-sectional slicing (I, J, K planes)
+- [x] Cross-sectional slicing (I, J, K planes)
+  - [x] Single and multi-slice per grid support
+  - [x] Initial K=1 slice auto-created on first load
+  - [x] Compact inline slice dropdown in grid list
+  - [x] Per-slice controls: plane selection, index slider, 1-based display
+  - [x] Add/remove slices dynamically
+  - [x] Slice-only rendering (no full-grid fallback; no slices = no render)
+  - [x] Slices persist across toggle (no auto-recreate on toggle)
 - [ ] Arbitrary cutting planes
 - [ ] Volume rendering for 3D data
 - [ ] Particle injection and flow visualization

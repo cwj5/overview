@@ -22,7 +22,7 @@ import { LoadingIndicator } from "./components/LoadingIndicator";
 import { logger } from "./utils/logger";
 import { groupGridsByFile } from "./utils/gridUtils";
 import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
-import type { GridItem } from "./types/grids";
+import type { GridItem, GridSlice } from "./types/grids";
 import type { ScalarField } from "./utils/solutionData";
 import type { ColorScheme } from "./utils/colorMapping";
 import "./App.css";
@@ -61,10 +61,7 @@ const buildGridItems = (
     visible: true,
   }));
 
-function App() {
-  const [grids, setGrids] = useState<GridItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState("Processing...");
+const App = () => {
   const [error, setError] = useState("");
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [showLogs, setShowLogs] = useState(false);
@@ -77,6 +74,46 @@ function App() {
   const [showWireframe, setShowWireframe] = useState(true);
   const [shadingMode, setShadingMode] = useState<'none' | 'flat' | 'smooth'>('none');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sliceEnabled, setSliceEnabled] = useState(true);
+  const [grids, setGrids] = useState<GridItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("Processing...");
+
+  const [gridSlices, setGridSlices] = useState<Record<string, GridSlice[]>>({});
+
+  const getGridSlices = (gridId: string): GridSlice[] => gridSlices[gridId] || [];
+
+  const addSliceToGrid = (gridId: string) => {
+    const grid = grids.find(g => g.id === gridId);
+    if (!grid) return;
+
+    const newSlice: GridSlice = {
+      id: `${gridId}_${Date.now()}`,
+      plane: 'K',
+      index: 0
+    };
+
+    setGridSlices(prev => ({
+      ...prev,
+      [gridId]: [...(prev[gridId] || []), newSlice]
+    }));
+  };
+
+  const removeSliceFromGrid = (gridId: string, sliceId: string) => {
+    setGridSlices(prev => ({
+      ...prev,
+      [gridId]: (prev[gridId] || []).filter(s => s.id !== sliceId)
+    }));
+  };
+
+  const updateGridSlice = (gridId: string, sliceId: string, updates: Partial<GridSlice>) => {
+    setGridSlices(prev => ({
+      ...prev,
+      [gridId]: (prev[gridId] || []).map(s =>
+        s.id === sliceId ? { ...s, ...updates } : s
+      )
+    }));
+  };
 
   // Debug: Log whenever loading state changes
   useEffect(() => {
@@ -300,6 +337,9 @@ function App() {
       setIsolateSelected(false);
       setHasSolution(false);
 
+      // Initialize gridSlices as empty - slices will be created on-demand when slicing is enabled
+      setGridSlices({});
+
       // Try to load solution files
       if (potentialSolutionPaths.length > 0) {
         setLoadingMessage("Loading solution data...");
@@ -448,9 +488,10 @@ function App() {
               borderRight: '1px solid #1f2937',
               display: 'flex',
               flexDirection: 'column',
-              padding: sidebarCollapsed ? '12px 6px' : '12px',
-              gap: '12px',
+              padding: sidebarCollapsed ? '10px 6px' : '10px 14px 10px 10px',
+              gap: '10px',
               overflow: 'auto',
+              scrollbarGutter: 'stable both-edges',
               transition: 'width 0.3s ease'
             }}
           >
@@ -521,13 +562,26 @@ function App() {
                   </button>
                 </div>
 
+                {/* Slicing controls */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Slicing</strong>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                    <input
+                      type="checkbox"
+                      checked={sliceEnabled}
+                      onChange={(e) => setSliceEnabled(e.target.checked)}
+                    />
+                    Slicing {sliceEnabled ? '(enabled)' : '(disabled)'}
+                  </label>
+                </div>
+
                 {gridTree.length === 0 ? (
                   <div style={{ fontSize: '12px', color: '#94a3b8' }}>Load a PLOT3D file to view grids.</div>
                 ) : (
                   gridTree.map((group) => {
                     const allVisible = group.grids.every((grid) => grid.visible);
                     return (
-                      <details key={group.filePath} open style={{ background: '#111827', borderRadius: '8px', padding: '8px' }}>
+                      <details key={group.filePath} open={sliceEnabled} style={{ background: '#111827', borderRadius: '8px', padding: '8px' }}>
                         <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -561,9 +615,10 @@ function App() {
                                 key={grid.id}
                                 style={{
                                   display: 'flex',
+                                  flexWrap: 'wrap',
                                   alignItems: 'center',
-                                  gap: '8px',
-                                  padding: '6px',
+                                  gap: '6px',
+                                  padding: '4px',
                                   borderRadius: '6px',
                                   background: isSelected ? 'rgba(148, 163, 184, 0.2)' : 'transparent',
                                 }}
@@ -620,6 +675,84 @@ function App() {
                                     )}
                                   </span>
                                 </button>
+
+                                {/* Slices dropdown - compact inline trigger */}
+                                {sliceEnabled && (
+                                  <details className="slice-details" style={{ background: '#0a0e1a', borderRadius: '4px' }}>
+                                    <summary style={{ cursor: 'pointer', padding: '3px 6px', fontSize: '10px', color: '#cbd5e1', userSelect: 'none' }}>
+                                      ({getGridSlices(grid.id).length} slice{getGridSlices(grid.id).length !== 1 ? 's' : ''})
+                                    </summary>
+                                    <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 6px 6px 6px', paddingRight: '12px' }}>
+                                      {getGridSlices(grid.id).map((slice) => {
+                                        const dims = grid.grid.dimensions;
+                                        const maxIdx = slice.plane === 'I' ? dims.i : slice.plane === 'J' ? dims.j : dims.k;
+                                        return (
+                                          <div key={slice.id} style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '11px', color: '#cbd5e1' }}>
+                                            <select
+                                              value={slice.plane}
+                                              onChange={(e) => updateGridSlice(grid.id, slice.id, { plane: e.target.value as 'I' | 'J' | 'K' })}
+                                              style={{
+                                                padding: '2px 4px',
+                                                background: '#1a2640',
+                                                color: '#e2e8f0',
+                                                border: '1px solid #334155',
+                                                borderRadius: '3px',
+                                                fontSize: '10px'
+                                              }}
+                                            >
+                                              <option value="I">I</option>
+                                              <option value="J">J</option>
+                                              <option value="K">K</option>
+                                            </select>
+                                            <input
+                                              type="range"
+                                              min={0}
+                                              max={Math.max(0, maxIdx - 1)}
+                                              value={slice.index}
+                                              onChange={(e) => updateGridSlice(grid.id, slice.id, { index: parseInt(e.target.value) })}
+                                              style={{ flex: 1, height: '12px', minWidth: '80px' }}
+                                            />
+                                            <span style={{ minWidth: '18px', textAlign: 'right' }}>{slice.index + 1}</span>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                removeSliceFromGrid(grid.id, slice.id);
+                                              }}
+                                              style={{
+                                                flex: '0 0 18px',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: '#ef4444',
+                                                cursor: 'pointer',
+                                                padding: '0 4px',
+                                                fontSize: '12px'
+                                              }}
+                                            >
+                                              ✕
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
+                                      <button
+                                        onClick={() => addSliceToGrid(grid.id)}
+                                        style={{
+                                          marginTop: '4px',
+                                          padding: '2px 6px',
+                                          fontSize: '10px',
+                                          background: '#1d4ed8',
+                                          border: 'none',
+                                          color: 'white',
+                                          borderRadius: '3px',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        + Add slice
+                                      </button>
+                                    </div>
+                                  </details>
+                                )}
                               </div>
                             );
                           })}
@@ -665,6 +798,9 @@ function App() {
               colorScheme={currentColorScheme}
               showWireframe={showWireframe}
               shadingMode={shadingMode}
+              sliceEnabled={sliceEnabled}
+              gridSlices={gridSlices}
+              onSlicesChange={setGridSlices}
               onLoadingChange={handleViewer3DLoadingChange}
             />
           </div>

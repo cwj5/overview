@@ -23,8 +23,8 @@ use logger::{clear_logs, export_logs, get_logs, log_debug, log_error, log_info, 
 use once_cell::sync::Lazy;
 use plot3d::{
     get_last_solution_metadata, read_plot3d_function, read_plot3d_grid_ascii,
-    read_plot3d_grid_with_metadata, read_plot3d_solution, read_plot3d_solution_ascii, MeshGeometry,
-    Plot3DFunction, Plot3DGrid, Plot3DSolution, SolutionFileMetadata,
+    read_plot3d_grid_with_metadata, read_plot3d_solution, read_plot3d_solution_ascii,
+    GridDimensions, MeshGeometry, Plot3DFunction, Plot3DGrid, Plot3DSolution, SolutionFileMetadata,
 };
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -371,6 +371,20 @@ fn convert_grid_to_mesh(
     Ok(mesh)
 }
 
+/// Slice a PLOT3D grid along a constant I, J, or K plane
+#[tauri::command]
+fn slice_grid(grid: Plot3DGrid, plane: String, index: u32) -> Result<Plot3DGrid, String> {
+    log_debug(&format!(
+        "Slicing grid along {} plane at index {}",
+        plane, index
+    ));
+    grid.slice_grid(&plane, index).map_err(|e| {
+        let error_msg = format!("Failed to slice grid: {}", e);
+        log_error(&error_msg);
+        error_msg
+    })
+}
+
 #[derive(Deserialize)]
 struct ComputeSolutionColorsArgs {
     grid: Plot3DGrid,
@@ -591,6 +605,308 @@ fn compute_solution_colors_only_cached(
     Ok(compute_colors(&values, &scheme))
 }
 
+#[derive(Deserialize)]
+struct ComputeSolutionColorsSlicedArgs {
+    sliced_grid: Plot3DGrid,
+    original_grid: Plot3DGrid,
+    #[serde(alias = "gridIndex", alias = "grid_index")]
+    grid_index: usize,
+    field: String,
+    #[serde(alias = "colorScheme", alias = "color_scheme")]
+    color_scheme: String,
+    #[serde(alias = "slicePlane", alias = "slice_plane")]
+    slice_plane: String,
+    #[serde(alias = "sliceIndex", alias = "slice_index")]
+    slice_index: u32,
+}
+
+/// Helper function to compute a scalar field value from a single point's solution data
+fn compute_scalar_field_value(solution: &Plot3DSolution, field: solution::ScalarField) -> f32 {
+    use solution::ScalarField;
+
+    if solution.rho.is_empty() {
+        return 0.0;
+    }
+
+    match field {
+        ScalarField::Density => solution.rho[0],
+
+        ScalarField::VelocityMagnitude => {
+            let rho = solution.rho[0];
+            if rho > 0.0 {
+                let u = solution.rhou[0] / rho;
+                let v = solution.rhov[0] / rho;
+                let w = solution.rhow[0] / rho;
+                (u * u + v * v + w * w).sqrt()
+            } else {
+                0.0
+            }
+        }
+
+        ScalarField::MomentumX => solution.rhou[0],
+        ScalarField::MomentumY => solution.rhov[0],
+        ScalarField::MomentumZ => solution.rhow[0],
+
+        ScalarField::Pressure => {
+            const DEFAULT_GAMMA: f32 = 1.4;
+            let rho = solution.rho[0];
+            if rho > 0.0 {
+                let gamma = solution
+                    .gamma
+                    .as_ref()
+                    .map(|g| g[0])
+                    .unwrap_or(DEFAULT_GAMMA);
+                let u = solution.rhou[0] / rho;
+                let v = solution.rhov[0] / rho;
+                let w = solution.rhow[0] / rho;
+                let kinetic_energy = 0.5 * rho * (u * u + v * v + w * w);
+                let internal_energy = solution.rhoe[0] - kinetic_energy;
+                (gamma - 1.0) * internal_energy
+            } else {
+                0.0
+            }
+        }
+
+        ScalarField::Energy => solution.rhoe[0],
+    }
+}
+
+/// Compute scalar field colors for a sliced grid using original grid's solution data
+/// Maps sliced grid points back to their original indices for solution lookup
+#[tauri::command]
+fn compute_solution_colors_sliced(
+    sliced_grid: Plot3DGrid,
+    original_grid: Plot3DGrid,
+    grid_index: usize,
+    field: String,
+    color_scheme: String,
+    slice_plane: String,
+    slice_index: u32,
+    window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    use solution::{compute_colors, ColorScheme, ScalarField};
+
+    log_debug(&format!(
+        "compute_solution_colors_sliced called: plane={}, index={}, field={}, grid={}",
+        slice_plane, slice_index, field, grid_index
+    ));
+    let _ = window.emit(
+        "loading-start",
+        format!("Computing {} field on slice...", field),
+    );
+
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+
+    let scheme = ColorScheme::from_str(&color_scheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", color_scheme))?;
+
+    // Get the cached solution for this grid
+    let solution = {
+        let store = SOLUTION_CACHE
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = store
+            .iter()
+            .find(|sol| sol.grid_index == grid_index)
+            .ok_or_else(|| format!("No cached solution for grid index {}", grid_index))?;
+        Arc::clone(cached)
+    };
+
+    // Validate that solution dimensions match original grid
+    let grid_points = original_grid.total_points();
+    if solution.rho.len() != grid_points {
+        return Err(format!(
+            "Solution points {} != original grid points {}",
+            solution.rho.len(),
+            grid_points
+        ));
+    }
+
+    // Extract the original grid dimensions
+    let i_orig = original_grid.dimensions.i as usize;
+    let j_orig = original_grid.dimensions.j as usize;
+    let k_orig = original_grid.dimensions.k as usize;
+
+    // Extract the sliced grid dimensions
+    let i_slice = sliced_grid.dimensions.i as usize;
+    let j_slice = sliced_grid.dimensions.j as usize;
+    let _k_slice = sliced_grid.dimensions.k as usize;
+
+    let slice_idx = slice_index as usize;
+
+    // Map each point in the sliced grid back to its original indices to get solution values
+    let mut values = Vec::with_capacity(sliced_grid.total_points());
+
+    let linear_index_original =
+        |i: usize, j: usize, k: usize| -> usize { i + j * i_orig + k * i_orig * j_orig };
+
+    match slice_plane.to_uppercase().as_str() {
+        "K" => {
+            // Constant K plane: sliced grid has dimensions (i_orig x j_orig x 1)
+            // Each point (i,j) in sliced grid maps to (i,j,slice_idx) in original
+            for j_idx in 0..j_slice {
+                for i_idx in 0..i_slice {
+                    let orig_i = i_idx;
+                    let orig_j = j_idx;
+                    let orig_k = slice_idx;
+
+                    if orig_i >= i_orig || orig_j >= j_orig || orig_k >= k_orig {
+                        return Err(format!(
+                            "K-slice mapping out of bounds: ({},{},{}) not in ({},{},{})",
+                            orig_i, orig_j, orig_k, i_orig, j_orig, k_orig
+                        ));
+                    }
+
+                    let orig_linear = linear_index_original(orig_i, orig_j, orig_k);
+
+                    // Extract solution values at this point
+                    let rho = solution.rho[orig_linear];
+                    let rhou = solution.rhou[orig_linear];
+                    let rhov = solution.rhov[orig_linear];
+                    let rhow = solution.rhow[orig_linear];
+                    let rhoe = solution.rhoe[orig_linear];
+
+                    // Get gamma if available
+                    let gamma = solution.gamma.as_ref().map(|g| g[orig_linear]);
+
+                    // Create a temporary solution at this point to compute scalar field
+                    let point_solution = Plot3DSolution {
+                        grid_index: 0,
+                        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
+                        rho: vec![rho],
+                        rhou: vec![rhou],
+                        rhov: vec![rhov],
+                        rhow: vec![rhow],
+                        rhoe: vec![rhoe],
+                        gamma: gamma.map(|g| vec![g]),
+                        metadata: None,
+                    };
+
+                    // Compute scalar field value
+                    let value = compute_scalar_field_value(&point_solution, field_enum);
+                    values.push(value);
+                }
+            }
+        }
+        "J" => {
+            // Constant J plane: sliced grid has dimensions (i_orig x k_orig x 1)
+            // The sliced dimensions are remapped: i_slice=i_orig, j_slice=k_orig
+            // Each point (i,k) in sliced grid maps to (i,slice_idx,k) in original
+            for k_idx in 0..j_slice {
+                // j_slice becomes k for the loop
+                for i_idx in 0..i_slice {
+                    let orig_i = i_idx;
+                    let orig_j = slice_idx;
+                    let orig_k = k_idx;
+
+                    if orig_i >= i_orig || orig_j >= j_orig || orig_k >= k_orig {
+                        return Err(format!(
+                            "J-slice mapping out of bounds: ({},{},{}) not in ({},{},{})",
+                            orig_i, orig_j, orig_k, i_orig, j_orig, k_orig
+                        ));
+                    }
+
+                    let orig_linear = linear_index_original(orig_i, orig_j, orig_k);
+
+                    let rho = solution.rho[orig_linear];
+                    let rhou = solution.rhou[orig_linear];
+                    let rhov = solution.rhov[orig_linear];
+                    let rhow = solution.rhow[orig_linear];
+                    let rhoe = solution.rhoe[orig_linear];
+
+                    let gamma = solution.gamma.as_ref().map(|g| g[orig_linear]);
+
+                    let point_solution = Plot3DSolution {
+                        grid_index: 0,
+                        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
+                        rho: vec![rho],
+                        rhou: vec![rhou],
+                        rhov: vec![rhov],
+                        rhow: vec![rhow],
+                        rhoe: vec![rhoe],
+                        gamma: gamma.map(|g| vec![g]),
+                        metadata: None,
+                    };
+
+                    let value = compute_scalar_field_value(&point_solution, field_enum);
+                    values.push(value);
+                }
+            }
+        }
+        "I" => {
+            // Constant I plane: sliced grid has dimensions (j_orig x k_orig x 1)
+            // The sliced dimensions are remapped: i_slice=j_orig, j_slice=k_orig
+            // Each point (j,k) in sliced grid maps to (slice_idx,j,k) in original
+            for k_idx in 0..j_slice {
+                // j_slice becomes k for the loop
+                for j_idx in 0..i_slice {
+                    // i_slice becomes j for the loop
+                    let orig_i = slice_idx;
+                    let orig_j = j_idx;
+                    let orig_k = k_idx;
+
+                    if orig_i >= i_orig || orig_j >= j_orig || orig_k >= k_orig {
+                        return Err(format!(
+                            "I-slice mapping out of bounds: ({},{},{}) not in ({},{},{})",
+                            orig_i, orig_j, orig_k, i_orig, j_orig, k_orig
+                        ));
+                    }
+
+                    let orig_linear = linear_index_original(orig_i, orig_j, orig_k);
+
+                    let rho = solution.rho[orig_linear];
+                    let rhou = solution.rhou[orig_linear];
+                    let rhov = solution.rhov[orig_linear];
+                    let rhow = solution.rhow[orig_linear];
+                    let rhoe = solution.rhoe[orig_linear];
+
+                    let gamma = solution.gamma.as_ref().map(|g| g[orig_linear]);
+
+                    let point_solution = Plot3DSolution {
+                        grid_index: 0,
+                        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
+                        rho: vec![rho],
+                        rhou: vec![rhou],
+                        rhov: vec![rhov],
+                        rhow: vec![rhow],
+                        rhoe: vec![rhoe],
+                        gamma: gamma.map(|g| vec![g]),
+                        metadata: None,
+                    };
+
+                    let value = compute_scalar_field_value(&point_solution, field_enum);
+                    values.push(value);
+                }
+            }
+        }
+        _ => {
+            return Err(format!(
+                "Invalid slice plane: {}. Must be 'I', 'J', or 'K'",
+                slice_plane
+            ))
+        }
+    }
+
+    // Convert values to colors
+    let colors = compute_colors(&values, &scheme);
+    log_debug(&format!(
+        "Computed {} colors for slice {}{}",
+        colors.len() / 3,
+        slice_plane,
+        slice_index
+    ));
+
+    // Create mesh geometry from sliced grid
+    // Use decimation_factor=1 for consistency with the sliced geometry size
+    let mut mesh = sliced_grid.to_mesh_surface_geometry_decimated(false, 1);
+    mesh.colors = Some(colors);
+
+    let _ = window.emit("loading-end", ());
+
+    Ok(mesh)
+}
+
 #[tauri::command]
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let file_path = app.dialog().file().blocking_pick_file();
@@ -740,9 +1056,11 @@ pub fn run() {
             load_plot3d_solution_auto,
             load_plot3d_function,
             convert_grid_to_mesh,
+            slice_grid,
             compute_solution_colors,
             compute_solution_colors_cached,
             compute_solution_colors_only_cached,
+            compute_solution_colors_sliced,
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,

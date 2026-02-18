@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { BufferGeometry, BufferAttribute, ShaderMaterial, DoubleSide } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
-import type { GridItem } from '../types/grids';
+import type { GridItem, GridSlice } from '../types/grids';
 import type { ColorScheme } from '../utils/colorMapping';
 import type { ScalarField } from '../utils/solutionData';
 import { getVisibleGridItems } from '../utils/gridUtils';
@@ -24,6 +24,7 @@ interface SerializableGrid {
     x_coords: number[];
     y_coords: number[];
     z_coords: number[];
+    original_indices?: number[]; // Maps sliced points back to original grid indices
 }
 
 interface Viewer3DProps {
@@ -35,6 +36,9 @@ interface Viewer3DProps {
     colorScheme?: ColorScheme;
     showWireframe?: boolean;
     shadingMode?: 'none' | 'flat' | 'smooth';
+    sliceEnabled?: boolean;
+    gridSlices?: Record<string, GridSlice[]>;
+    onSlicesChange?: (slices: Record<string, GridSlice[]>) => void;
     onLoadingChange?: (isLoading: boolean) => void;
 }
 
@@ -296,12 +300,16 @@ export default function Viewer3D({
     colorScheme = 'viridis',
     showWireframe = true,
     shadingMode = 'none',
+    sliceEnabled = false,
+    gridSlices = {},
+    onSlicesChange,
     onLoadingChange
 }: Viewer3DProps) {
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingById, setLoadingById] = useState<Record<string, number>>({});
     const [error, setError] = useState<string | null>(null);
     const cleanGridCacheRef = useRef<Record<string, SerializableGrid>>({});
+    const autoCreatedSlicesRef = useRef(false);
 
     type MeshResult = { id: string; mesh: MeshGeometry } | { id: string; error: string };
 
@@ -311,16 +319,20 @@ export default function Viewer3D({
         onLoadingChange?.(isLoading);
     }, [loadingById, onLoadingChange]);
 
+    const gridIdKey = useMemo(() => grids.map((grid) => grid.id).join('|'), [grids]);
+
     // Clear meshes when grids change
     useEffect(() => {
+        autoCreatedSlicesRef.current = false;
         if (grids.length === 0) {
             setMeshById({});
             setLoadingById({});
             setError(null);
         }
-    }, [grids.length]);
+    }, [gridIdKey, grids.length]);
 
     const lastColorKeyRef = useRef<string>('');
+    const lastSliceKeyRef = useRef<string>('');
     const requestIdRef = useRef(0);
 
     // Generate or regenerate meshes as needed
@@ -335,17 +347,96 @@ export default function Viewer3D({
         }
 
         const currentColorKey = `${scalarField}|${colorScheme}`;
+        const sliceKey = `${sliceEnabled}|${JSON.stringify(gridSlices)}`;
         const shouldRecolor = lastColorKeyRef.current !== currentColorKey;
+        const shouldReslice = lastSliceKeyRef.current !== sliceKey;
+        
+        void invoke('frontend_log', {
+            message: `[Viewer3D] Color key check: last="${lastColorKeyRef.current}" current="${currentColorKey}" shouldRecolor=${shouldRecolor}`
+        });
+        void invoke('frontend_log', {
+            message: `[Viewer3D] Slice key check: shouldReslice=${shouldReslice}`
+        });
+
+        const hasSlices = Object.keys(gridSlices).length > 0;
+        const hasMeshes = Object.keys(meshById).length > 0;
+
+        // Auto-create default K=1 slices only once when a new grid set is first loaded
+        if (!hasSlices && !autoCreatedSlicesRef.current) {
+            void invoke('frontend_log', { message: '[Viewer3D] Creating default K=1 slices on initial grid load' });
+            const newSlices: Record<string, GridSlice[]> = {};
+            grids.forEach(grid => {
+                newSlices[grid.id] = [{
+                    id: `${grid.id}_default`,
+                    plane: 'K',
+                    index: 0
+                }];
+            });
+            autoCreatedSlicesRef.current = true;
+            onSlicesChange?.(newSlices);
+            return; // Return to let the effect re-run with the new slices
+        }
+
+        // No slices means nothing is rendered, even if slicing is disabled
+        if (!hasSlices) {
+            requestIdRef.current += 1; // Cancel any in-flight mesh work
+            setLoadingById({});
+            setMeshById((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+            lastSliceKeyRef.current = sliceKey;
+            return;
+        }
+
+        // Clear meshes when slicing is disabled - no rendering when slices are off
+        if (!sliceEnabled) {
+            requestIdRef.current += 1; // Cancel any in-flight mesh work
+            setLoadingById({});
+            setMeshById((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+            lastSliceKeyRef.current = sliceKey;
+            return;
+        }
+
+        const gridsWithSlices = grids.filter((grid) => (gridSlices[grid.id]?.length ?? 0) > 0);
+        if (sliceEnabled) {
+            if (gridsWithSlices.length === 0) {
+                if (Object.keys(meshById).length > 0) {
+                    setMeshById({});
+                }
+                lastSliceKeyRef.current = sliceKey;
+                return;
+            }
+
+            const gridsWithoutSlices = grids.filter((grid) => (gridSlices[grid.id]?.length ?? 0) === 0);
+            const hasStaleMeshes = gridsWithoutSlices.some((grid) => meshById[grid.id]);
+            if (hasStaleMeshes) {
+                setMeshById((prev) => {
+                    const next = { ...prev };
+                    gridsWithoutSlices.forEach((grid) => {
+                        delete next[grid.id];
+                    });
+                    return next;
+                });
+            }
+        }
+
+        const targetGrids = sliceEnabled ? gridsWithSlices : grids;
 
         // Determine which grids need to be regenerated
         // 1. On color/field change: regenerate all grids to avoid stale colors
-        // 2. Otherwise: only grids without any mesh
-        const missing = shouldRecolor
-            ? grids
-            : grids.filter((grid) => !meshById[grid.id]);
+        // 2. On slice change: regenerate all grids affected by slice changes
+        // 3. Otherwise: only grids without any mesh
+        let missing = shouldRecolor
+            ? targetGrids
+            : shouldReslice
+            ? targetGrids  // Regenerate all grids when slice config changes
+            : targetGrids.filter((grid) => !meshById[grid.id]);
+
+        void invoke('frontend_log', {
+            message: `[Viewer3D] Missing grids: ${missing.length} of ${targetGrids.length} (shouldRecolor=${shouldRecolor}, shouldReslice=${shouldReslice})`
+        });
 
         if (missing.length === 0) {
             void invoke('frontend_log', { message: '[Viewer3D] effect no-op (missing=0)' });
+            lastSliceKeyRef.current = sliceKey;
             return;
         }
 
@@ -390,28 +481,172 @@ export default function Viewer3D({
             missing.map(async (gridItem) => {
                 try {
                     const gridStart = performance.now();
-                    const cleanGrid = await getCleanGrid(gridItem);
-
+                    let cleanGrid = await getCleanGrid(gridItem);
                     let mesh: MeshGeometry;
 
-                    if (gridItem.solution && scalarField !== 'none') {
+                    // Apply all slices for this grid if enabled
+                    if (sliceEnabled && gridSlices[gridItem.id] && gridSlices[gridItem.id].length > 0) {
                         try {
-                            mesh = await invoke<MeshGeometry>('compute_solution_colors_cached', {
-                                grid: cleanGrid,
-                                gridIndex: gridItem.gridIndex,
-                                field: scalarField,
-                                colorScheme: colorScheme,
+                            // Render each slice independently from the original grid
+                            const slicePromises = gridSlices[gridItem.id].map(async (slice) => {
+                                let slicedGrid = await invoke<SerializableGrid>('slice_grid', {
+                                    grid: cleanGrid,
+                                    plane: slice.plane,
+                                    index: slice.index,
+                                });
+                                logger.debug(`Applied ${slice.plane} slice at index ${slice.index}`, 'Viewer3D');
+                                return { sliceId: slice.id, grid: slicedGrid, slice };
                             });
-                        } catch (invokeErr) {
-                            const invokeMsg = String(invokeErr);
-                            logger.error(`[${gridItem.id}] compute_solution_colors_cached FAILED: ${invokeMsg}`, 'Viewer3D');
-                            throw invokeErr;
+                            
+                            const sliceResults = await Promise.all(slicePromises);
+                            
+                            // Generate meshes for each slice with solution colors if available
+                            const sliceMeshes = await Promise.all(
+                                sliceResults.map(async ({ sliceId, grid, slice }) => {
+                                    let sliceMesh: MeshGeometry;
+                                    // Try to apply solution colors to sliced geometry
+                                    if (gridItem.solution && scalarField !== 'none') {
+                                        try {
+                                            logger.debug(`Attempting solution coloring for slice ${slice.plane}${slice.index}...`, 'Viewer3D');
+                                            sliceMesh = await invoke<MeshGeometry>('compute_solution_colors_sliced', {
+                                                slicedGrid: grid,
+                                                originalGrid: cleanGrid,
+                                                gridIndex: gridItem.gridIndex,
+                                                field: scalarField,
+                                                colorScheme: colorScheme,
+                                                slicePlane: slice.plane,
+                                                sliceIndex: slice.index,
+                                            });
+                                            const hasColors = sliceMesh.colors && sliceMesh.colors.length > 0;
+                                            void invoke('frontend_log', {
+                                                message: `[Viewer3D] Slice ${slice.plane}${slice.index}: Colors ${hasColors ? 'YES' : 'NO'} (${sliceMesh.colors?.length || 0} values for ${sliceMesh.vertices.length} bytes vertices)`
+                                            });
+                                        } catch (colorErr) {
+                                            // Fall back to non-colored geometry if solution coloring fails
+                                            void invoke('frontend_log', {
+                                                message: `[Viewer3D] Solution coloring FAILED on slice ${slice.plane}${slice.index}: ${colorErr}`
+                                            });
+                                            logger.error(`Solution coloring on slice (${slice.plane}${slice.index}) failed: ${colorErr}`, 'Viewer3D');
+                                            sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
+                                                grid: grid,
+                                                respect_iblank: !ignoreIblank
+                                            });
+                                        }
+                                    } else {
+                                        // No solution data - use base geometry
+                                        sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
+                                            grid: grid,
+                                            respect_iblank: !ignoreIblank
+                                        });
+                                    }
+                                    return { sliceId, mesh: sliceMesh };
+                                })
+                            );
+                            
+                            // Merge all slice meshes into one
+                            if (sliceMeshes.length > 0) {
+                                const mergedMesh: MeshGeometry = {
+                                    vertices: [],
+                                    indices: [],
+                                    triangle_indices: [],
+                                    normals: [],
+                                    colors: undefined,
+                                    vertex_count: 0,
+                                    face_count: 0,
+                                };
+                                
+                                // Check if all slices have colors before processing them
+                                const allHaveColors = sliceMeshes.every(({ mesh }) => mesh.colors && mesh.colors.length > 0);
+                                void invoke('frontend_log', {
+                                    message: `[Viewer3D] Merging ${sliceMeshes.length} slices, allHaveColors=${allHaveColors}`
+                                });
+                                sliceMeshes.forEach((sm, idx) => {
+                                    void invoke('frontend_log', {
+                                        message: `[Viewer3D]  Slice ${idx}: verts=${sm.mesh.vertices.length/3 | 0}, colors=${sm.mesh.colors?.length || 0}`
+                                    });
+                                });
+                                
+                                if (allHaveColors) {
+                                    mergedMesh.colors = [];
+                                }
+                                
+                                for (const { mesh: sliceMesh } of sliceMeshes) {
+                                    const vertexOffset = mergedMesh.vertices.length / 3;
+                                    
+                                    // Append vertices and normals
+                                    mergedMesh.vertices.push(...sliceMesh.vertices);
+                                    mergedMesh.normals.push(...sliceMesh.normals);
+                                    
+                                    // Append colors only if we're collecting them from all slices
+                                    if (mergedMesh.colors && sliceMesh.colors && sliceMesh.colors.length > 0) {
+                                        mergedMesh.colors.push(...sliceMesh.colors);
+                                    }
+                                    
+                                    // Append indices (offset by vertex count)
+                                    mergedMesh.indices.push(...sliceMesh.indices.map(idx => idx + vertexOffset));
+                                    mergedMesh.triangle_indices.push(...sliceMesh.triangle_indices.map(idx => idx + vertexOffset));
+                                    
+                                    // Update counts
+                                    mergedMesh.vertex_count += sliceMesh.vertex_count;
+                                    mergedMesh.face_count += sliceMesh.face_count;
+                                }
+                                
+                                // Verify colors array matches vertices
+                                logger.debug(`Merged: vertices=${mergedMesh.vertices.length}, colors=${mergedMesh.colors?.length ?? 0}`, 'Viewer3D');
+                                if (mergedMesh.colors && mergedMesh.colors.length > 0) {
+                                    const expectedColorLength = mergedMesh.vertices.length;
+                                    void invoke('frontend_log', {
+                                        message: `[Viewer3D] Color validation: have ${mergedMesh.colors.length} need ${expectedColorLength}`
+                                    });
+                                    if (mergedMesh.colors.length !== expectedColorLength) {
+                                        void invoke('frontend_log', {
+                                            message: `[Viewer3D] MISMATCH: discarding colors`
+                                        });
+                                        logger.warn(`Color array length mismatch: have ${mergedMesh.colors.length} but need ${expectedColorLength}. This likely means slices have different vertex counts or color computation failed. Discarding colors.`, 'Viewer3D');
+                                        mergedMesh.colors = undefined;
+                                    } else {
+                                        void invoke('frontend_log', {
+                                            message: `[Viewer3D] Color validation PASSED`
+                                        });
+                                        logger.debug(`Color validation PASSED: ${mergedMesh.colors.length} colors for ${mergedMesh.vertices.length} vertices`, 'Viewer3D');
+                                    }
+                                } else {
+                                    void invoke('frontend_log', {
+                                        message: `[Viewer3D] No colors in merged mesh`
+                                    });
+                                    logger.debug(`No colors in merged mesh (expected for uncolored slices)`, 'Viewer3D');
+                                }
+                                
+                                mesh = mergedMesh;
+                            } else {
+                                throw new Error('No slice meshes generated');
+                            }
+                        } catch (sliceErr) {
+                            const sliceMsg = String(sliceErr);
+                            logger.error(`Slicing failed: ${sliceMsg}`, 'Viewer3D');
+                            throw sliceErr;
                         }
                     } else {
-                        mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
-                            grid: cleanGrid,
-                            respect_iblank: !ignoreIblank
-                        });
+                        // No slicing - use the original grid
+                        if (gridItem.solution && scalarField !== 'none') {
+                            try {
+                                mesh = await invoke<MeshGeometry>('compute_solution_colors_cached', {
+                                    grid: cleanGrid,
+                                    gridIndex: gridItem.gridIndex,
+                                    field: scalarField,
+                                    colorScheme: colorScheme,
+                                });
+                            } catch (invokeErr) {
+                                const invokeMsg = String(invokeErr);
+                                logger.error(`[${gridItem.id}] compute_solution_colors_cached FAILED: ${invokeMsg}`, 'Viewer3D');
+                                throw invokeErr;
+                            }
+                        } else {
+                            mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
+                                grid: cleanGrid,
+                                respect_iblank: !ignoreIblank
+                            });
+                        }
                     }
 
                     void invoke('frontend_log', {
@@ -435,6 +670,7 @@ export default function Viewer3D({
             });
 
             lastColorKeyRef.current = currentColorKey;
+            lastSliceKeyRef.current = sliceKey;
 
             const errors = results.filter((result) => "error" in result) as { id: string; error: string }[];
             if (errors.length > 0) {
@@ -480,7 +716,7 @@ export default function Viewer3D({
                 message: `[Viewer3D] effect cancelled ms=${Math.round(performance.now() - effectStart)}`
             });
         };
-    }, [grids, ignoreIblank, scalarField, colorScheme, meshById]);
+    }, [grids, ignoreIblank, scalarField, colorScheme, meshById, sliceEnabled, gridSlices]);
 
     const visibleGrids = useMemo(
         () => getVisibleGridItems(grids, selectedGridIds, isolateSelected),

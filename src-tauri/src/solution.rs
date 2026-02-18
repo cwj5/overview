@@ -25,7 +25,7 @@ impl ColorScheme {
 }
 
 /// Scalar field types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ScalarField {
     Density,
     VelocityMagnitude,
