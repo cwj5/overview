@@ -46,7 +46,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.0-dev \
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev \
             libappindicator3-dev librsvg2-dev patchelf pkg-config libasound2-dev
       
       - name: Setup Rust
@@ -130,7 +130,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.0-dev \
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev \
             libappindicator3-dev librsvg2-dev patchelf pkg-config libasound2-dev
       
       - name: Cache Rust dependencies
