@@ -136,15 +136,23 @@ mod tests {
     #[test]
     fn test_log_entry_timestamp_format() {
         clear_logs();
-        log_entry("INFO", "Timestamp test", None);
+        let unique_msg = format!(
+            "Timestamp test {}",
+            std::time::SystemTime::now().elapsed().unwrap().as_nanos()
+        );
+        log_entry("INFO", &unique_msg, None);
 
         let logs = get_logs();
         assert!(!logs.is_empty());
 
-        let last = &logs[logs.len() - 1];
+        let entry = logs
+            .iter()
+            .rev()
+            .find(|log| log.message == unique_msg)
+            .expect("Could not find logged entry");
         // Timestamp should match format MM-DD | HH:MM:SS.mmm
-        assert!(last.timestamp.contains("|"));
-        assert!(last.timestamp.len() >= 16); // Minimum length of timestamp format
+        assert!(entry.timestamp.contains("|"));
+        assert!(entry.timestamp.len() >= 16); // Minimum length of timestamp format
     }
 
     #[test]
@@ -161,6 +169,9 @@ mod tests {
 
     #[test]
     fn test_clear_logs() {
+        // Clear before test to ensure clean state
+        clear_logs();
+
         // Add some logs
         log_entry("INFO", "Log 1", None);
         log_entry("INFO", "Log 2", None);
@@ -177,39 +188,52 @@ mod tests {
     #[test]
     fn test_log_entry_with_empty_message() {
         clear_logs();
-        log_entry("INFO", "", None);
+        // Empty message test - use a unique module to identify it
+        log_entry("INFO", "", Some("empty_msg_test".to_string()));
 
         let logs = get_logs();
         assert!(!logs.is_empty());
 
-        let last = &logs[logs.len() - 1];
-        assert_eq!(last.message, "");
+        let entry = logs
+            .iter()
+            .rev()
+            .find(|log| log.module == Some("empty_msg_test".to_string()))
+            .expect("Could not find logged entry");
+        assert_eq!(entry.message, "");
     }
 
     #[test]
     fn test_log_entry_with_special_characters() {
         clear_logs();
         let special_msg = "Message with special chars: !@#$%^&*()_+-=[]{}|;':\"<>,.?/";
-        log_entry("INFO", special_msg, None);
+        log_entry("INFO", special_msg, Some("special_chars_test".to_string()));
 
         let logs = get_logs();
         assert!(!logs.is_empty());
 
-        let last = &logs[logs.len() - 1];
-        assert_eq!(last.message, special_msg);
+        let entry = logs
+            .iter()
+            .rev()
+            .find(|log| log.module == Some("special_chars_test".to_string()))
+            .expect("Could not find logged entry");
+        assert_eq!(entry.message, special_msg);
     }
 
     #[test]
     fn test_log_entry_with_unicode() {
         clear_logs();
         let unicode_msg = "Unicode test: 你好 мир 🦀 🎉";
-        log_entry("INFO", unicode_msg, None);
+        log_entry("INFO", unicode_msg, Some("unicode_test".to_string()));
 
         let logs = get_logs();
         assert!(!logs.is_empty());
 
-        let last = &logs[logs.len() - 1];
-        assert_eq!(last.message, unicode_msg);
+        let entry = logs
+            .iter()
+            .rev()
+            .find(|log| log.module == Some("unicode_test".to_string()))
+            .expect("Could not find logged entry");
+        assert_eq!(entry.message, unicode_msg);
     }
 
     #[test]
@@ -239,13 +263,17 @@ mod tests {
     #[test]
     fn test_log_entry_source_is_crab() {
         clear_logs();
-        log_entry("INFO", "Test", None);
+        log_entry("INFO", "Test", Some("source_crab_test".to_string()));
 
         let logs = get_logs();
         assert!(!logs.is_empty());
 
-        let last = &logs[logs.len() - 1];
-        assert_eq!(last.source, "🦀");
+        let entry = logs
+            .iter()
+            .rev()
+            .find(|log| log.module == Some("source_crab_test".to_string()))
+            .expect("Could not find logged entry");
+        assert_eq!(entry.source, "🦀");
     }
 
     #[test]
@@ -256,9 +284,13 @@ mod tests {
         let logs = get_logs();
         assert!(!logs.is_empty());
 
-        let last = &logs[logs.len() - 1];
-        assert_eq!(last.level, "WARN");
-        assert_eq!(last.message, "Warning test");
+        let entry = logs
+            .iter()
+            .rev()
+            .find(|log| log.message == "Warning test")
+            .expect("Could not find logged entry");
+        assert_eq!(entry.level, "WARN");
+        assert_eq!(entry.message, "Warning test");
     }
 
     #[test]
