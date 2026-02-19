@@ -56,7 +56,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          save-if: ${{ success() }}
 
       - name: Install Tarpaulin
         run: cargo install cargo-tarpaulin
@@ -138,7 +137,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          save-if: ${{ success() }}
       
       - name: Run all tests
         run: |
