@@ -26,11 +26,14 @@ fi
 
 # Run TypeScript tests
 echo -e "${YELLOW}Running TypeScript tests...${NC}"
-if npm test > /dev/null 2>&1; then
+TS_TEST_OUTPUT=$(npm test 2>&1)
+TS_TEST_EXIT=$?
+
+if [ $TS_TEST_EXIT -eq 0 ]; then
     echo -e "${GREEN}✓ TypeScript tests passed${NC}"
 else
     echo -e "${RED}✗ TypeScript tests failed${NC}"
-    npm test
+    echo "$TS_TEST_OUTPUT"
     exit 1
 fi
 
@@ -38,11 +41,14 @@ echo ""
 
 # Run Rust tests
 echo -e "${YELLOW}Running Rust tests...${NC}"
-if (cd "$REPO_ROOT/src-tauri" && cargo test --lib > /dev/null 2>&1); then
+RUST_TEST_OUTPUT=$(cd "$REPO_ROOT/src-tauri" && cargo test --lib 2>&1)
+RUST_TEST_EXIT=$?
+
+if [ $RUST_TEST_EXIT -eq 0 ]; then
     echo -e "${GREEN}✓ Rust tests passed${NC}"
 else
     echo -e "${RED}✗ Rust tests failed${NC}"
-    (cd "$REPO_ROOT/src-tauri" && cargo test --lib)
+    echo "$RUST_TEST_OUTPUT"
     exit 1
 fi
 
