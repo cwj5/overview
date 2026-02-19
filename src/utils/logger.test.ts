@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { logger, type LogEntry, parseLogTimestamp } from './logger';
+import { logger, parseLogTimestamp } from './logger';
 
 describe('logger', () => {
     beforeEach(() => {
