@@ -41,16 +41,29 @@ echo ""
 
 # Run Rust tests
 echo -e "${YELLOW}Running Rust tests...${NC}"
-RUST_TEST_OUTPUT=$(cd "$REPO_ROOT/src-tauri" && cargo test --lib 2>&1)
-RUST_TEST_EXIT=$?
-
-if [ $RUST_TEST_EXIT -eq 0 ]; then
-    echo -e "${GREEN}✓ Rust tests passed${NC}"
+# First run logger tests serially (to avoid global state conflicts)
+LOGGER_TEST_LOG=$(mktemp)
+if (cd "$REPO_ROOT/src-tauri" && cargo test --lib logger_tests -- --test-threads=1 >"$LOGGER_TEST_LOG" 2>&1); then
+    echo -e "${GREEN}✓ Logger tests passed${NC}"
 else
-    echo -e "${RED}✗ Rust tests failed${NC}"
-    echo "$RUST_TEST_OUTPUT"
+    echo -e "${RED}✗ Logger tests failed${NC}"
+    cat "$LOGGER_TEST_LOG"
+    rm -f "$LOGGER_TEST_LOG"
     exit 1
 fi
+rm -f "$LOGGER_TEST_LOG"
+
+# Then run all other tests in parallel
+OTHER_TEST_LOG=$(mktemp)
+if (cd "$REPO_ROOT/src-tauri" && cargo test --lib -- --skip logger_tests >"$OTHER_TEST_LOG" 2>&1); then
+    echo -e "${GREEN}✓ Other Rust tests passed${NC}"
+else
+    echo -e "${RED}✗ Other Rust tests failed${NC}"
+    cat "$OTHER_TEST_LOG"
+    rm -f "$OTHER_TEST_LOG"
+    exit 1
+fi
+rm -f "$OTHER_TEST_LOG"
 
 echo ""
 echo -e "${GREEN}✅ All checks passed! Proceeding with commit.${NC}"
