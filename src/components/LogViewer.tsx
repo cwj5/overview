@@ -1,52 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { logger, LogEntry } from "../utils/logger";
+import { logger, LogEntry, parseLogTimestamp } from "../utils/logger";
 import "./LogViewer.css";
 
 interface LogViewerProps {
     isOpen?: boolean;
     onToggle?: (open: boolean) => void;
 }
-
-const parseLogTimestamp = (timestamp: string): number => {
-    const parsed = Date.parse(timestamp);
-    if (!Number.isNaN(parsed)) {
-        return parsed;
-    }
-
-    // Match format with milliseconds: MM-DD | HH:MM:SS.mmm
-    const matchWithMs = timestamp.match(/^(\d{2})-(\d{2})\s*\|\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})$/);
-    if (matchWithMs) {
-        const [, month, day, hour, minute, second, millisecond] = matchWithMs;
-        const year = new Date().getFullYear();
-        return new Date(
-            year,
-            Number(month) - 1,
-            Number(day),
-            Number(hour),
-            Number(minute),
-            Number(second),
-            Number(millisecond)
-        ).getTime();
-    }
-
-    // Fallback: Match format without milliseconds: MM-DD | HH:MM:SS
-    const match = timestamp.match(/^(\d{2})-(\d{2})\s*\|\s*(\d{2}):(\d{2}):(\d{2})$/);
-    if (match) {
-        const [, month, day, hour, minute, second] = match;
-        const year = new Date().getFullYear();
-        return new Date(
-            year,
-            Number(month) - 1,
-            Number(day),
-            Number(hour),
-            Number(minute),
-            Number(second)
-        ).getTime();
-    }
-
-    return 0;
-};
 
 export const LogViewer: React.FC<LogViewerProps> = ({
     isOpen = false,

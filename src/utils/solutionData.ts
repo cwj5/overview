@@ -5,6 +5,7 @@
  */
 
 import type { Plot3DSolution } from "../types/plot3d";
+import { DEFAULT_GAMMA } from "./constants";
 
 /**
  * Supported scalar fields for visualization
@@ -70,6 +71,39 @@ export const SCALAR_FIELDS: ScalarFieldInfo[] = [
 ];
 
 /**
+ * Compute velocity magnitude from momentum components
+ */
+function computeVelocityMagnitude(rho: number, rhou: number, rhov: number, rhow: number): number {
+    if (rho <= 0) return 0;
+
+    const u = rhou / rho;
+    const v = rhov / rho;
+    const w = rhow / rho;
+    return Math.sqrt(u * u + v * v + w * w);
+}
+
+/**
+ * Compute pressure from conservative variables
+ */
+function computePressure(
+    rho: number,
+    rhou: number,
+    rhov: number,
+    rhow: number,
+    rhoe: number,
+    gamma: number
+): number {
+    if (rho <= 0) return 0;
+
+    const u = rhou / rho;
+    const v = rhov / rho;
+    const w = rhow / rho;
+    const kinetic_energy = 0.5 * rho * (u * u + v * v + w * w);
+    const internal_energy = rhoe - kinetic_energy;
+    return (gamma - 1) * internal_energy;
+}
+
+/**
  * Compute a scalar field from solution data
  */
 export function computeScalarField(solution: Plot3DSolution, field: ScalarField): Float32Array {
@@ -85,38 +119,27 @@ export function computeScalarField(solution: Plot3DSolution, field: ScalarField)
             return new Float32Array(solution.rho);
 
         case 'velocity_magnitude':
-            // |V| = sqrt(u² + v² + w²)
-            // where u = rhou/rho, v = rhov/rho, w = rhow/rho
             for (let i = 0; i < totalPoints; i++) {
-                const rho = solution.rho[i];
-                if (rho > 0) {
-                    const u = solution.rhou[i] / rho;
-                    const v = solution.rhov[i] / rho;
-                    const w = solution.rhow[i] / rho;
-                    result[i] = Math.sqrt(u * u + v * v + w * w);
-                } else {
-                    result[i] = 0;
-                }
+                result[i] = computeVelocityMagnitude(
+                    solution.rho[i],
+                    solution.rhou[i],
+                    solution.rhov[i],
+                    solution.rhow[i]
+                );
             }
             return result;
 
         case 'pressure':
-            // p = (gamma - 1) * (rhoe - 0.5 * rho * (u² + v² + w²))
-            // Use gamma from solution file if available, otherwise default to 1.4 (air)
-            const DEFAULT_GAMMA = 1.4;
             for (let i = 0; i < totalPoints; i++) {
-                const rho = solution.rho[i];
-                if (rho > 0) {
-                    const gamma = solution.gamma ? solution.gamma[i] : DEFAULT_GAMMA;
-                    const u = solution.rhou[i] / rho;
-                    const v = solution.rhov[i] / rho;
-                    const w = solution.rhow[i] / rho;
-                    const kinetic_energy = 0.5 * rho * (u * u + v * v + w * w);
-                    const internal_energy = solution.rhoe[i] - kinetic_energy;
-                    result[i] = (gamma - 1) * internal_energy;
-                } else {
-                    result[i] = 0;
-                }
+                const gamma = solution.gamma ? solution.gamma[i] : DEFAULT_GAMMA;
+                result[i] = computePressure(
+                    solution.rho[i],
+                    solution.rhou[i],
+                    solution.rhov[i],
+                    solution.rhow[i],
+                    solution.rhoe[i],
+                    gamma
+                );
             }
             return result;
 

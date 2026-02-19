@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { MAX_LOG_ENTRIES, LOG_TIMESTAMP_FORMAT } from "./constants";
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
@@ -8,6 +9,49 @@ export interface LogEntry {
     message: string;
     module?: string;
     source: "frontend" | "backend" | "⚛️" | "🦀";
+}
+
+/**
+ * Parse log timestamp from custom format
+ */
+export function parseLogTimestamp(timestamp: string): number {
+    const parsed = Date.parse(timestamp);
+    if (!Number.isNaN(parsed)) {
+        return parsed;
+    }
+
+    // Match format with milliseconds: MM-DD | HH:MM:SS.mmm
+    const matchWithMs = timestamp.match(LOG_TIMESTAMP_FORMAT.MS_PATTERN);
+    if (matchWithMs) {
+        const [, month, day, hour, minute, second, millisecond] = matchWithMs;
+        const year = new Date().getFullYear();
+        return new Date(
+            year,
+            Number(month) - 1,
+            Number(day),
+            Number(hour),
+            Number(minute),
+            Number(second),
+            Number(millisecond)
+        ).getTime();
+    }
+
+    // Fallback: Match format without milliseconds: MM-DD | HH:MM:SS
+    const match = timestamp.match(LOG_TIMESTAMP_FORMAT.NO_MS_PATTERN);
+    if (match) {
+        const [, month, day, hour, minute, second] = match;
+        const year = new Date().getFullYear();
+        return new Date(
+            year,
+            Number(month) - 1,
+            Number(day),
+            Number(hour),
+            Number(minute),
+            Number(second)
+        ).getTime();
+    }
+
+    return 0;
 }
 
 /**
@@ -68,9 +112,9 @@ class Logger {
 
         this.logs.push(entry);
 
-        // Keep only last 1000 entries
-        if (this.logs.length > 1000) {
-            this.logs = this.logs.slice(-1000);
+        // Keep only last MAX_LOG_ENTRIES entries
+        if (this.logs.length > MAX_LOG_ENTRIES) {
+            this.logs = this.logs.slice(-MAX_LOG_ENTRIES);
         }
 
         // Notify listeners

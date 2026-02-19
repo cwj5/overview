@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Pre-commit hook to run tests before allowing commits
+# This ensures code quality is maintained
+
+set -e
+
+echo "🧪 Running pre-commit checks..."
+echo ""
+
+# Colors for output
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if we're in the right directory
+if [ ! -f "package.json" ]; then
+    echo -e "${RED}❌ Error: package.json not found. Are you in the project root?${NC}"
+    exit 1
+fi
+
+# Run TypeScript tests
+echo -e "${YELLOW}Running TypeScript tests...${NC}"
+if npm test > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ TypeScript tests passed${NC}"
+else
+    echo -e "${RED}✗ TypeScript tests failed${NC}"
+    npm test
+    exit 1
+fi
+
+echo ""
+
+# Run Rust tests
+echo -e "${YELLOW}Running Rust tests...${NC}"
+if cd src-tauri && cargo test --lib > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ Rust tests passed${NC}"
+    cd ..
+else
+    echo -e "${RED}✗ Rust tests failed${NC}"
+    cd src-tauri
+    cargo test --lib
+    cd ..
+    exit 1
+fi
+
+echo ""
+echo -e "${GREEN}✅ All checks passed! Proceeding with commit.${NC}"
+exit 0

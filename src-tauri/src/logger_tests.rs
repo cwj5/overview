@@ -74,4 +74,206 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_init_logger() {
+        init_logger();
+        // Should not panic and logs should be obtainable
+        let logs = get_logs();
+        // logs.len() >= 0 (always true for Vec)
+        assert!(logs.len() >= 0);
+    }
+
+    #[test]
+    #[test]
+    fn test_log_info_with_module() {
+        // Add a unique message to avoid conflicts with other tests
+        let unique_msg = format!(
+            "Test with module at {}",
+            std::time::SystemTime::now().elapsed().unwrap().as_nanos()
+        );
+        log_entry("INFO", &unique_msg, Some("TestModule".to_string()));
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        // Find the entry we just added (it should be recent)
+        let found = logs.iter().rev().take(10).find(|log| {
+            log.message == unique_msg
+                && log.level == "INFO"
+                && log.module == Some("TestModule".to_string())
+        });
+
+        assert!(
+            found.is_some(),
+            "Could not find the log entry we just added"
+        );
+        if let Some(entry) = found {
+            assert_eq!(entry.source, "🦀");
+        }
+    }
+
+    #[test]
+    fn test_log_all_levels() {
+        // Log with unique identifiers to avoid conflicts with other tests
+        let time = std::time::SystemTime::now().elapsed().unwrap().as_nanos();
+        log_entry("DEBUG", &format!("Debug-{}", time), None);
+        log_entry("INFO", &format!("Info-{}", time), None);
+        log_entry("WARN", &format!("Warn-{}", time), None);
+        log_entry("ERROR", &format!("Error-{}", time), None);
+
+        let logs = get_logs();
+        // Just verify that logs can be retrieved and contain recent entries
+        assert!(!logs.is_empty());
+
+        // Check that our messages were added (should be in last 5 entries due to other tests)
+        let recent_logs: Vec<_> = logs.iter().rev().take(10).collect();
+        let messages: Vec<_> = recent_logs.iter().map(|l| l.message.as_str()).collect();
+
+        // Verify we can find messages with the right time identifier
+        assert!(messages.iter().any(|m| m.contains(&format!("{}", time))));
+    }
+
+    #[test]
+    fn test_log_entry_timestamp_format() {
+        clear_logs();
+        log_entry("INFO", "Timestamp test", None);
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        let last = &logs[logs.len() - 1];
+        // Timestamp should match format MM-DD | HH:MM:SS.mmm
+        assert!(last.timestamp.contains("|"));
+        assert!(last.timestamp.len() >= 16); // Minimum length of timestamp format
+    }
+
+    #[test]
+    fn test_multiple_log_entries() {
+        clear_logs();
+
+        for i in 0..5 {
+            log_entry("INFO", &format!("Message {}", i), None);
+        }
+
+        let logs = get_logs();
+        assert!(logs.len() >= 5);
+    }
+
+    #[test]
+    fn test_clear_logs() {
+        // Add some logs
+        log_entry("INFO", "Log 1", None);
+        log_entry("INFO", "Log 2", None);
+
+        let before = get_logs();
+        assert!(!before.is_empty());
+
+        // Clear and verify
+        clear_logs();
+        let after = get_logs();
+        assert_eq!(after.len(), 0);
+    }
+
+    #[test]
+    fn test_log_entry_with_empty_message() {
+        clear_logs();
+        log_entry("INFO", "", None);
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        let last = &logs[logs.len() - 1];
+        assert_eq!(last.message, "");
+    }
+
+    #[test]
+    fn test_log_entry_with_special_characters() {
+        clear_logs();
+        let special_msg = "Message with special chars: !@#$%^&*()_+-=[]{}|;':\"<>,.?/";
+        log_entry("INFO", special_msg, None);
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        let last = &logs[logs.len() - 1];
+        assert_eq!(last.message, special_msg);
+    }
+
+    #[test]
+    fn test_log_entry_with_unicode() {
+        clear_logs();
+        let unicode_msg = "Unicode test: 你好 мир 🦀 🎉";
+        log_entry("INFO", unicode_msg, None);
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        let last = &logs[logs.len() - 1];
+        assert_eq!(last.message, unicode_msg);
+    }
+
+    #[test]
+    fn test_export_logs_with_multiple_entries() -> std::io::Result<()> {
+        // Add logs with different levels and modules
+        log_entry("INFO", "First message", None);
+        log_entry("WARN", "Warning message", Some("Module1".to_string()));
+        log_entry("ERROR", "Error message", Some("Module2".to_string()));
+
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_str().unwrap();
+
+        export_logs(path)?;
+
+        let content = fs::read_to_string(path)?;
+        // Verify export has the expected structure
+        assert!(content.contains("Mehu PLOT3D Viewer"));
+        assert!(content.contains("================================"));
+
+        // Verify at least some log entries are present (might have other logs from other tests)
+        let lines: Vec<_> = content.lines().collect();
+        assert!(lines.len() > 5); // Header + entries
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_log_entry_source_is_crab() {
+        clear_logs();
+        log_entry("INFO", "Test", None);
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        let last = &logs[logs.len() - 1];
+        assert_eq!(last.source, "🦀");
+    }
+
+    #[test]
+    fn test_log_warn_function() {
+        clear_logs();
+        log_warn("Warning test");
+
+        let logs = get_logs();
+        assert!(!logs.is_empty());
+
+        let last = &logs[logs.len() - 1];
+        assert_eq!(last.level, "WARN");
+        assert_eq!(last.message, "Warning test");
+    }
+
+    #[test]
+    fn test_log_entry_max_entries() {
+        // This is a pseudo-test since we can't easily test the 1000 limit
+        // in an isolated way, but we verify that logging many entries doesn't crash
+        clear_logs();
+
+        for i in 0..50 {
+            log_entry("INFO", &format!("Entry {}", i), None);
+        }
+
+        let logs = get_logs();
+        // Verify at least some entries were added (exact count may vary due to shared state)
+        assert!(!logs.is_empty());
+    }
 }

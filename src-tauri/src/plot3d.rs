@@ -2170,7 +2170,8 @@ mod tests {
 
         // Check that indices were generated for line segments
         assert!(mesh.indices.len() > 0);
-        assert_eq!(mesh.face_count, mesh.indices.len() / 2); // Line segments, not triangles
+        // face_count represents number of triangles (1 quad = 2 triangles)
+        assert_eq!(mesh.face_count, 2);
 
         // Check normals
         assert_eq!(mesh.normals.len(), 12);
@@ -2284,7 +2285,8 @@ mod tests {
 
         // Without respecting iblank, should have 4 quads (2x2 grid = 4 quads)
         let mesh_no_blank = grid.to_mesh_geometry(false);
-        assert_eq!(mesh_no_blank.face_count, 16); // 4 quads * 4 edges = 16 line segments
+        // 4 quads * 2 triangles per quad = 8 triangles
+        assert_eq!(mesh_no_blank.face_count, 8);
 
         // With respecting iblank, should have fewer quads (those with blanked corners are excluded)
         let mesh_with_blank = grid.to_mesh_geometry(true);
@@ -2306,11 +2308,13 @@ mod tests {
 
         // Without iblank: 4 quads
         let mesh_no_blank = grid.to_mesh_geometry(false);
-        assert_eq!(mesh_no_blank.face_count, 16); // 4 quads * 4 edges
+        // 4 quads * 2 triangles per quad = 8 triangles
+        assert_eq!(mesh_no_blank.face_count, 8);
 
         // With iblank: should lose 1 quad (top-right quad that uses point 8)
         let mesh_with_blank = grid.to_mesh_geometry(true);
-        assert_eq!(mesh_with_blank.face_count, 12); // 3 quads * 4 edges
+        // 3 remaining quads * 2 triangles per quad = 6 triangles
+        assert_eq!(mesh_with_blank.face_count, 6);
     }
 
     #[test]

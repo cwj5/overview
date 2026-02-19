@@ -1,5 +1,12 @@
 # Mehu - PLOT3D Viewer
 
+[![Build and Release](https://github.com/cwj5/mehu/actions/workflows/build.yml/badge.svg)](https://github.com/cwj5/mehu/actions/workflows/build.yml)
+[![Test and Coverage](https://github.com/cwj5/mehu/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/cwj5/mehu/actions/workflows/test-coverage.yml)
+[![TypeScript Tests](https://img.shields.io/badge/TypeScript_Tests-100%2F100-brightgreen)](https://github.com/cwj5/mehu)
+[![TypeScript Coverage](https://img.shields.io/badge/TypeScript_Coverage-97.62%25-brightgreen)](https://github.com/cwj5/mehu)
+[![Rust Tests](https://img.shields.io/badge/Rust_Tests-86%2F86-brightgreen)](https://github.com/cwj5/mehu)
+[![Rust Coverage](https://img.shields.io/badge/Rust_Coverage-45.28%25-yellow)](https://github.com/cwj5/mehu)
+
 A modern, cross-platform application for visualizing CFD (Computational Fluid Dynamics) grid and solution data in PLOT3D format.
 
 > **About the Name**: "Mehu" is a Twi phrase (a language spoken in Ghana) meaning "I see" — reflecting the core purpose of this visualization tool.
@@ -51,6 +58,46 @@ npm run tauri dev
 # Build for production
 npm run tauri build
 ```
+
+## Testing
+
+This project maintains high code quality with comprehensive automated tests:
+
+### Running Tests
+
+```bash
+# Run all TypeScript tests
+npm test
+
+# Run TypeScript tests with coverage report
+npm run test:coverage
+
+# Watch mode for TypeScript tests
+npm run test:watch
+
+# Run Rust library tests
+cd src-tauri && cargo test --lib
+
+# Generate Rust coverage report
+cd src-tauri && cargo tarpaulin --lib --timeout 300
+```
+
+### Pre-commit Hooks
+
+Tests are automatically run before each commit to ensure code quality:
+
+```bash
+# The hooks are configured during development setup
+# To bypass hooks (not recommended): git commit --no-verify
+```
+
+### Coverage Status
+
+- **TypeScript**: 97.62% coverage (100 tests)
+- **Rust**: 45.28% coverage (86 tests)
+- **Total**: 186 tests across full stack
+
+Coverage reports are generated automatically in GitHub Actions on all pull requests.
 
 ## Project Structure
 

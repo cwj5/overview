@@ -642,4 +642,256 @@ mod tests {
         let colors = compute_colors(&values, &ColorScheme::Viridis);
         assert_eq!(colors.len(), 0);
     }
+
+    #[test]
+    fn test_color_scheme_from_str() {
+        assert!(matches!(
+            ColorScheme::from_str("viridis"),
+            Some(ColorScheme::Viridis)
+        ));
+        assert!(matches!(
+            ColorScheme::from_str("turbo"),
+            Some(ColorScheme::Turbo)
+        ));
+        assert!(matches!(
+            ColorScheme::from_str("rainbow"),
+            Some(ColorScheme::Rainbow)
+        ));
+        assert!(matches!(
+            ColorScheme::from_str("hot"),
+            Some(ColorScheme::Hot)
+        ));
+        assert!(matches!(
+            ColorScheme::from_str("grayscale"),
+            Some(ColorScheme::Grayscale)
+        ));
+        assert!(ColorScheme::from_str("invalid").is_none());
+        assert!(ColorScheme::from_str("").is_none());
+    }
+
+    #[test]
+    fn test_color_schemes_different() {
+        // Different color schemes should produce different colors for the same value
+        let (r1, g1, b1) = map_value_to_color(0.5, &ColorScheme::Viridis);
+        let (r2, g2, b2) = map_value_to_color(0.5, &ColorScheme::Rainbow);
+        let (r3, g3, b3) = map_value_to_color(0.5, &ColorScheme::Hot);
+        let (r4, g4, b4) = map_value_to_color(0.5, &ColorScheme::Turbo);
+
+        // At least most schemes should differ from each other at mid-range
+        let mut total_diff = 0.0;
+        total_diff += (r1 - r2).abs() + (g1 - g2).abs() + (b1 - b2).abs();
+        total_diff += (r1 - r3).abs() + (g1 - g3).abs() + (b1 - b3).abs();
+        total_diff += (r1 - r4).abs() + (g1 - g4).abs() + (b1 - b4).abs();
+
+        assert!(
+            total_diff > 1.0,
+            "Color schemes should be visibly different"
+        );
+    }
+
+    #[test]
+    fn test_grayscale_color_scheme() {
+        // Grayscale should have equal R, G, B components
+        for v in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            let (r, g, b) = map_value_to_color(*v, &ColorScheme::Grayscale);
+            assert!((r - g).abs() < 1e-6);
+            assert!((g - b).abs() < 1e-6);
+            assert!((r - *v).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_rainbow_color_transitions() {
+        // Test rainbow transitions through spectrum
+        let colors: Vec<_> = vec![0.1, 0.3, 0.5, 0.7, 0.9]
+            .iter()
+            .map(|&v| map_value_to_color(v, &ColorScheme::Rainbow))
+            .collect();
+
+        // All colors should be valid RGB
+        for (r, g, b) in colors {
+            assert!(r >= 0.0 && r <= 1.0);
+            assert!(g >= 0.0 && g <= 1.0);
+            assert!(b >= 0.0 && b <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_compute_colors_with_nan_values() {
+        let values = vec![1.0, f32::NAN, 3.0, f32::NAN, 5.0];
+        let colors = compute_colors(&values, &ColorScheme::Viridis);
+
+        // Should have 5 * 3 = 15 colors
+        assert_eq!(colors.len(), 15);
+
+        // All color values should be valid (NaN inputs produce normalized value 0.0)
+        for &c in &colors {
+            assert!(c.is_finite());
+            assert!(c >= 0.0 && c <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_compute_colors_with_infinite_values() {
+        let values = vec![1.0, f32::INFINITY, 3.0, f32::NEG_INFINITY, 5.0];
+        let colors = compute_colors(&values, &ColorScheme::Viridis);
+
+        // Should still produce valid colors
+        assert_eq!(colors.len(), 15);
+        for &c in &colors {
+            assert!(c >= 0.0 && c <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_compute_colors_uniform_field() {
+        // When all values are the same, all should map to the same range
+        let values = vec![42.0; 10];
+        let colors = compute_colors(&values, &ColorScheme::Viridis);
+
+        assert_eq!(colors.len(), 30);
+        // All colors should be the same (middle of the colormap since they're uniform)
+        for i in 0..10 {
+            assert_eq!(colors[i * 3], colors[0]);
+            assert_eq!(colors[i * 3 + 1], colors[1]);
+            assert_eq!(colors[i * 3 + 2], colors[2]);
+        }
+    }
+
+    #[test]
+    fn test_compute_field_stats_with_negatives() {
+        let values = vec![-5.0, -2.0, 0.0, 2.0, 5.0];
+        let stats = compute_field_stats(&values);
+
+        assert_eq!(stats.min, -5.0);
+        assert_eq!(stats.max, 5.0);
+        assert_eq!(stats.mean, 0.0);
+        // Using population std dev: sqrt(sum((x - mean)^2) / n)
+        // sum of squares: 25 + 4 + 0 + 4 + 25 = 58
+        // std_dev = sqrt(58 / 5) = sqrt(11.6) ≈ 3.404
+        assert!((stats.std_dev - 3.404).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_field_stats_large_numbers() {
+        let values = vec![1e6, 2e6, 3e6, 4e6, 5e6];
+        let stats = compute_field_stats(&values);
+
+        assert_eq!(stats.min, 1e6);
+        assert_eq!(stats.max, 5e6);
+        assert_eq!(stats.mean, 3e6);
+    }
+
+    #[test]
+    fn test_compute_scalar_field_surface() {
+        let solution = create_test_solution(18, false);
+        let decimation = 2;
+
+        let result = compute_scalar_field_surface(&solution, ScalarField::Density, decimation);
+
+        // With decimation factor 2 on a 2x2 grid (18 points total, but dimensions are 2x2x1)
+        // Result should contain surface values
+        assert!(!result.is_empty());
+
+        // All values should be valid
+        for &v in &result {
+            assert!(v.is_finite());
+            assert!(v > 0.0); // Density is positive
+        }
+    }
+
+    #[test]
+    fn test_compute_scalar_field_surface_all_fields() {
+        let solution = create_test_solution(18, true);
+
+        let fields = vec![
+            ScalarField::Density,
+            ScalarField::VelocityMagnitude,
+            ScalarField::Pressure,
+            ScalarField::MomentumX,
+            ScalarField::MomentumY,
+            ScalarField::MomentumZ,
+            ScalarField::Energy,
+        ];
+
+        for field in fields {
+            let result = compute_scalar_field_surface(&solution, field, 1);
+            assert!(!result.is_empty());
+
+            // All values should be finite
+            for &v in &result {
+                assert!(v.is_finite(), "Field {:?} produced non-finite value", field);
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_scalar_field_surface_decimation() {
+        let solution = create_test_solution(18, false);
+
+        let result_no_decimation = compute_scalar_field_surface(&solution, ScalarField::Density, 1);
+        let result_decimation = compute_scalar_field_surface(&solution, ScalarField::Density, 2);
+
+        // Decimated result should have fewer points
+        assert!(result_decimation.len() <= result_no_decimation.len());
+
+        // Both should be non-empty
+        assert!(!result_no_decimation.is_empty());
+        assert!(!result_decimation.is_empty());
+    }
+
+    #[test]
+    fn test_map_value_to_color_nan() {
+        // NaN should map to black
+        let (r, g, b) = map_value_to_color(f32::NAN, &ColorScheme::Viridis);
+        assert_eq!(r, 0.0);
+        assert_eq!(g, 0.0);
+        assert_eq!(b, 0.0);
+    }
+
+    #[test]
+    fn test_map_value_to_color_infinite() {
+        // Infinity should clamp to valid color
+        let (r1, g1, b1) = map_value_to_color(f32::INFINITY, &ColorScheme::Viridis);
+        assert!(r1 >= 0.0 && r1 <= 1.0);
+        assert!(g1 >= 0.0 && g1 <= 1.0);
+        assert!(b1 >= 0.0 && b1 <= 1.0);
+
+        let (r2, g2, b2) = map_value_to_color(f32::NEG_INFINITY, &ColorScheme::Viridis);
+        assert!(r2 >= 0.0 && r2 <= 1.0);
+        assert!(g2 >= 0.0 && g2 <= 1.0);
+        assert!(b2 >= 0.0 && b2 <= 1.0);
+    }
+
+    #[test]
+    fn test_turbo_color_bounds() {
+        // Turbo should always produce valid RGB even with edge values
+        for &v in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            let (r, g, b) = map_value_to_color(v, &ColorScheme::Turbo);
+            assert!(r >= 0.0 && r <= 1.0, "Red out of bounds at v={}", v);
+            assert!(g >= 0.0 && g <= 1.0, "Green out of bounds at v={}", v);
+            assert!(b >= 0.0 && b <= 1.0, "Blue out of bounds at v={}", v);
+        }
+    }
+
+    #[test]
+    fn test_hot_color_gradient() {
+        // Hot color should transition: black -> red -> yellow -> white
+        let black = map_value_to_color(0.0, &ColorScheme::Hot);
+        let red = map_value_to_color(0.16, &ColorScheme::Hot);
+        let yellow = map_value_to_color(0.5, &ColorScheme::Hot);
+        let white = map_value_to_color(1.0, &ColorScheme::Hot);
+
+        // Red should be brightest at red point
+        assert!(red.0 > black.0);
+
+        // Yellow should have R and G
+        assert!(yellow.0 > 0.5);
+        assert!(yellow.1 > 0.5);
+
+        // White should be bright in all channels
+        assert!(white.0 > 0.9);
+        assert!(white.1 > 0.9);
+        assert!(white.2 > 0.9);
+    }
 }

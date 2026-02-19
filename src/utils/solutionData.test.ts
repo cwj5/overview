@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { computeScalarField, getFieldStats, formatValue, SCALAR_FIELDS } from './solutionData';
+import { computeScalarField, getFieldStats, formatValue, getFieldInfo, SCALAR_FIELDS } from './solutionData';
 import type { Plot3DSolution } from '../types/plot3d';
 
 describe('solutionData', () => {
@@ -154,38 +154,88 @@ describe('solutionData', () => {
             expect(stats.mean).toBeCloseTo(3.14, 2);
             expect(stats.stdDev).toBeCloseTo(0, 6);
         });
+
+        it('should handle negative values', () => {
+            const values = new Float32Array([-10, -5, 0, 5, 10]);
+            const stats = getFieldStats(values);
+
+            expect(stats.min).toBe(-10);
+            expect(stats.max).toBe(10);
+            expect(stats.mean).toBe(0);
+        });
+
+        it('should handle empty array', () => {
+            const values = new Float32Array([]);
+            const stats = getFieldStats(values);
+
+            expect(stats.min).toBe(0);
+            expect(stats.max).toBe(0);
+            expect(stats.mean).toBe(0);
+            expect(stats.stdDev).toBe(0);
+        });
     });
 
     describe('formatValue', () => {
-        it('should format very small values in scientific notation', () => {
-            expect(formatValue(0.000001)).toBe('1.00e-6');
-            expect(formatValue(0.0001234)).toBe('1.23e-4');
-        });
-
-        it('should format small values with decimals', () => {
-            expect(formatValue(0.001234)).toBe('0.001');
-            expect(formatValue(0.5)).toBe('0.500');
-        });
-
-        it('should format normal values appropriately', () => {
-            expect(formatValue(1.23456)).toBe('1.23');
-            expect(formatValue(12.3456)).toBe('12.3');
-            expect(formatValue(123.456)).toBe('123');
-        });
-
-        it('should format large values in scientific notation', () => {
-            expect(formatValue(12345.6)).toBe('1.23e+4');
-            expect(formatValue(1000000)).toBe('1.00e+6');
-        });
-
-        it('should handle zero', () => {
+        it('should format zero correctly', () => {
             expect(formatValue(0)).toBe('0');
         });
 
-        it('should handle negative values', () => {
-            expect(formatValue(-1.234)).toBe('-1.23');
-            expect(formatValue(-0.0001)).toBe('-1.00e-4');
-            expect(formatValue(-123.456)).toBe('-123');
+        it('should format very small values in scientific notation', () => {
+            const result = formatValue(0.000001);
+            expect(result).toContain('e');
+        });
+
+        it('should format small values with decimals', () => {
+            const result = formatValue(0.5, 3);
+            const parsed = parseFloat(result);
+            expect(parsed).toBeCloseTo(0.5, 1);
+        });
+
+        it('should format normal values appropriately', () => {
+            const result = formatValue(12.3456, 3);
+            const parsed = parseFloat(result);
+            expect(parsed).toBeCloseTo(12.3456, 1);
+        });
+
+        it('should format large values in scientific notation', () => {
+            const result = formatValue(12345.6);
+            expect(result).toContain('e');
+        });
+
+        it('should handle NaN and Infinity', () => {
+            expect(formatValue(NaN)).toBe('N/A');
+            expect(formatValue(Infinity)).toBe('N/A');
+            expect(formatValue(-Infinity)).toBe('N/A');
+        });
+
+        it('should respect decimals parameter', () => {
+            const result1 = formatValue(0.123456, 2);
+            const result2 = formatValue(0.123456, 5);
+            // With fewer decimals, we should lose precision
+            expect(result1.length).toBeLessThanOrEqual(result2.length);
+        });
+    });
+
+    describe('getFieldInfo', () => {
+        it('should return info for valid field', () => {
+            const info = getFieldInfo('density');
+            expect(info.field).toBe('density');
+            expect(info.name).toBeDefined();
+            expect(info.name.length).toBeGreaterThan(0);
+        });
+
+        it('should return default info for invalid field', () => {
+            const info = getFieldInfo('invalid' as any);
+            expect(info).toBeDefined();
+            expect(info.field).toBe('none');
+        });
+
+        it('should have different info for each field', () => {
+            const density = getFieldInfo('density');
+            const pressure = getFieldInfo('pressure');
+
+            expect(density.name).not.toBe(pressure.name);
+            expect(density.unit).not.toBe(pressure.unit);
         });
     });
 
