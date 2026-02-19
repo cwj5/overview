@@ -172,12 +172,28 @@ mod tests {
         // Clear before test to ensure clean state
         clear_logs();
 
-        // Add some logs
-        log_entry("INFO", "Log 1", None);
-        log_entry("INFO", "Log 2", None);
+        // Add some logs with unique identifier
+        let unique_id = std::time::SystemTime::now().elapsed().unwrap().as_nanos();
+        log_entry(
+            "INFO",
+            &format!("Log 1 - {}", unique_id),
+            Some("clear_logs_test".to_string()),
+        );
+        log_entry(
+            "INFO",
+            &format!("Log 2 - {}", unique_id),
+            Some("clear_logs_test".to_string()),
+        );
 
         let before = get_logs();
-        assert!(!before.is_empty());
+        let count_before = before
+            .iter()
+            .filter(|log| log.module == Some("clear_logs_test".to_string()))
+            .count();
+        assert_eq!(
+            count_before, 2,
+            "Expected to find 2 log entries for clear_logs_test"
+        );
 
         // Clear and verify
         clear_logs();
