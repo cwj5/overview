@@ -43,12 +43,12 @@ The normal vector is automatically normalized, so you can use any non-zero value
 ## Technical Details
 
 ### Algorithm
-The implementation uses a **marching cells** algorithm:
-1. Each hexahedral cell in the structured grid is tested for intersection
-2. The 12 edges of each hex are checked for plane crossings
-3. Intersection points are computed using linear interpolation
-4. Points are sorted angularly to form proper polygons
-5. Polygons are tessellated into triangles for rendering
+The implementation uses a triangle-based intersection algorithm:
+1. Each hexahedral cell in the structured grid is split into triangles (each face is split consistently into two triangles)
+2. Each triangle is tested for intersection with the plane, including cases where triangle vertices or edges are exactly on the plane
+3. Intersection points are computed using linear interpolation, and exact matches are handled robustly
+4. Segments are formed for each intersected triangle, ensuring all aligned faces and edges are properly registered
+5. The resulting segments are used to render the planar slice
 
 ### Performance
 - Complexity: O(n) where n is the number of cells
@@ -59,6 +59,7 @@ The implementation uses a **marching cells** algorithm:
 - **No solution field coloring**: Arbitrary planes show geometry only (no density/pressure colors yet)
 - **Manual input only**: No interactive drag handles or rotation widgets (planned for future)
 - **No caching**: Plane is recomputed on every parameter change
+- **No polygonal slice output**: The current implementation outputs line segments for each triangle-plane intersection, not full polygons or tessellated triangles
 
 ## Troubleshooting
 
@@ -66,6 +67,7 @@ The implementation uses a **marching cells** algorithm:
 - Verify your plane point is near the grid bounds
 - Check that the plane actually passes through the grid volume
 - Try adjusting the point or normal to ensure intersection
+- If your plane is exactly aligned with a grid face or edge, the algorithm now robustly detects these cases. If you still see this error, check for floating-point precision issues and try slightly adjusting the plane parameters.
 
 ### "Plane normal vector has zero magnitude"
 - All normal components are zero
@@ -75,6 +77,7 @@ The implementation uses a **marching cells** algorithm:
 - Verify your coordinate system matches the grid's coordinate system
 - Check the grid bounds in the metadata
 - Ensure the normal vector points in the intended direction
+- If slices appear incomplete or missing, ensure your plane is not exactly coincident with a grid boundary; the algorithm now handles these cases, but floating-point precision may affect results.
 
 ## Future Enhancements
 - [ ] Solution field interpolation and coloring on arbitrary planes
@@ -94,6 +97,7 @@ slice_arbitrary_plane(
     plane_normal: [f32; 3],
 ) -> Result<MeshGeometry, String>
 ```
+*Note: The algorithm now uses triangle-based intersection and robustly handles faces/edges aligned with the plane.*
 
 ### TypeScript Interface
 ```typescript
