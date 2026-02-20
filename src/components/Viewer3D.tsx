@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { BufferGeometry, BufferAttribute, ShaderMaterial, DoubleSide } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
-import type { GridItem, GridSlice } from '../types/grids';
+import type { GridItem, GridSlice, ArbitrarySlice } from '../types/grids';
 import type { ColorScheme } from '../utils/colorMapping';
 import type { ScalarField } from '../utils/solutionData';
 import { getVisibleGridItems } from '../utils/gridUtils';
@@ -38,6 +38,7 @@ interface Viewer3DProps {
     shadingMode?: 'none' | 'flat' | 'smooth';
     sliceEnabled?: boolean;
     gridSlices?: Record<string, GridSlice[]>;
+    arbitrarySlices?: ArbitrarySlice[];
     onSlicesChange?: (slices: Record<string, GridSlice[]>) => void;
     onLoadingChange?: (isLoading: boolean) => void;
 }
@@ -302,6 +303,7 @@ export default function Viewer3D({
     shadingMode = 'none',
     sliceEnabled = false,
     gridSlices = {},
+    arbitrarySlices = [],
     onSlicesChange,
     onLoadingChange
 }: Viewer3DProps) {
@@ -335,6 +337,15 @@ export default function Viewer3D({
     const lastSliceKeyRef = useRef<string>('');
     const requestIdRef = useRef(0);
 
+    // Memoize a key based on applied slices (updates only on Apply)
+    const appliedSlicesKey = useMemo(
+        () => (arbitrarySlices || [])
+            .filter(s => s.applied)
+            .map(s => `${s.id}:${s.applyVersion}`)
+            .join('|'),
+        [arbitrarySlices]
+    );
+
     // Generate or regenerate meshes as needed
     // When field/scheme changes, regenerate grids with solutions
     useEffect(() => {
@@ -347,10 +358,11 @@ export default function Viewer3D({
         }
 
         const currentColorKey = `${scalarField}|${colorScheme}`;
-        const sliceKey = `${sliceEnabled}|${JSON.stringify(gridSlices)}`;
+        // Only include APPLIED slices in the slice key to avoid reprocessing while editing
+        const sliceKey = `${sliceEnabled}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
         const shouldRecolor = lastColorKeyRef.current !== currentColorKey;
         const shouldReslice = lastSliceKeyRef.current !== sliceKey;
-        
+
         void invoke('frontend_log', {
             message: `[Viewer3D] Color key check: last="${lastColorKeyRef.current}" current="${currentColorKey}" shouldRecolor=${shouldRecolor}`
         });
@@ -395,8 +407,11 @@ export default function Viewer3D({
         }
 
         const gridsWithSlices = grids.filter((grid) => (gridSlices[grid.id]?.length ?? 0) > 0);
+        const hasAppliedArbitrarySlices = (arbitrarySlices || []).some(s => s.applied);
+
         if (sliceEnabled) {
-            if (gridsWithSlices.length === 0) {
+            // Only return early if there are NO slices at all (neither I/J/K nor arbitrary)
+            if (gridsWithSlices.length === 0 && !hasAppliedArbitrarySlices) {
                 if (Object.keys(meshById).length > 0) {
                     setMeshById({});
                 }
@@ -404,6 +419,7 @@ export default function Viewer3D({
                 return;
             }
 
+            // Clean up I/J/K meshes for grids without slices
             const gridsWithoutSlices = grids.filter((grid) => (gridSlices[grid.id]?.length ?? 0) === 0);
             const hasStaleMeshes = gridsWithoutSlices.some((grid) => meshById[grid.id]);
             if (hasStaleMeshes) {
@@ -415,8 +431,35 @@ export default function Viewer3D({
                     return next;
                 });
             }
+
+            // Clean up arbitrary meshes only when slices are removed or no longer applied
+            const appliedArbitraryIds = new Set((arbitrarySlices || []).filter(s => s.applied).map(s => s.id));
+            const staleArbitraryMeshes = Object.keys(meshById).filter(id => {
+                if (id.startsWith('arbitrary::')) {
+                    const parts = id.split('::');
+                    const sliceId = parts[1];
+                    return !appliedArbitraryIds.has(sliceId);
+                }
+                // Legacy format: arbitrary_${sliceId}_${gridId} (cannot reliably parse), remove
+                if (id.startsWith('arbitrary_')) {
+                    return true;
+                }
+                return false;
+            });
+
+            if (staleArbitraryMeshes.length > 0) {
+                setMeshById((prev) => {
+                    const next = { ...prev };
+                    staleArbitraryMeshes.forEach((id: string) => {
+                        delete next[id];
+                    });
+                    return next;
+                });
+            }
         }
 
+        // targetGrids: grids that need I/J/K slice processing
+        // For arbitrary slices, we always process ALL grids regardless of I/J/K slices
         const targetGrids = sliceEnabled ? gridsWithSlices : grids;
 
         // Determine which grids need to be regenerated
@@ -426,15 +469,22 @@ export default function Viewer3D({
         let missing = shouldRecolor
             ? targetGrids
             : shouldReslice
-            ? targetGrids  // Regenerate all grids when slice config changes
-            : targetGrids.filter((grid) => !meshById[grid.id]);
+                ? targetGrids  // Regenerate all grids when slice config changes
+                : targetGrids.filter((grid) => !meshById[grid.id]);
 
         void invoke('frontend_log', {
             message: `[Viewer3D] Missing grids: ${missing.length} of ${targetGrids.length} (shouldRecolor=${shouldRecolor}, shouldReslice=${shouldReslice})`
         });
 
-        if (missing.length === 0) {
-            void invoke('frontend_log', { message: '[Viewer3D] effect no-op (missing=0)' });
+        // Regenerate arbitrary slices only if config changed or they're newly enabled
+        const needArbitraryRegen = hasAppliedArbitrarySlices && shouldReslice;
+
+        void invoke('frontend_log', {
+            message: `[Viewer3D] Arbitrary check: applied=${hasAppliedArbitrarySlices} shouldReslice=${shouldReslice} needRegen=${needArbitraryRegen}`
+        });
+
+        if (missing.length === 0 && !needArbitraryRegen) {
+            void invoke('frontend_log', { message: '[Viewer3D] effect no-op (missing=0, no reslice needed)' });
             lastSliceKeyRef.current = sliceKey;
             return;
         }
@@ -476,19 +526,60 @@ export default function Viewer3D({
             return cleanGrid;
         };
 
-        Promise.all(
+        // Process arbitrary cutting planes (global - affect ALL grids, not just those with I/J/K slices)
+        // Only process if they don't exist yet or if slices have changed
+        const arbitrarySlicePromises = needArbitraryRegen
+            ? (arbitrarySlices || [])
+                .filter((slice) => slice.enabled && slice.applied)
+                .map((arbitrarySlice) => {
+                    void invoke('frontend_log', {
+                        message: `[Viewer3D] Processing arbitrary slice: ${arbitrarySlice.name} against ${grids.length} grids`
+                    });
+                    return Promise.all(
+                        grids.map(async (gridItem) => {
+                            try {
+                                const cleanGrid = await getCleanGrid(gridItem);
+                                const mesh = await invoke<MeshGeometry>('slice_arbitrary_plane', {
+                                    grid: cleanGrid,
+                                    planePoint: arbitrarySlice.planePoint,
+                                    planeNormal: arbitrarySlice.planeNormal,
+                                });
+                                logger.debug(
+                                    `Arbitrary plane '${arbitrarySlice.name}' intersected grid ${gridItem.id}`,
+                                    'Viewer3D'
+                                );
+                                // Use special ID format for arbitrary slices
+                                return {
+                                    id: `arbitrary::${arbitrarySlice.id}::${gridItem.id}`,
+                                    mesh,
+                                };
+                            } catch (err) {
+                                // plane doesn't intersect this grid - expected, not an error
+                                return null;
+                            }
+                        })
+                    ).then((results) => results.filter((r) => r !== null));
+                })
+            : [];
+
+        void invoke('frontend_log', {
+            message: `[Viewer3D] Arbitrary slice promises: ${arbitrarySlicePromises.length}`
+        });
+
+        // Process per-grid I/J/K slices
+        const gridSlicePromises = Promise.all(
             missing.map(async (gridItem) => {
                 try {
                     const gridStart = performance.now();
                     let cleanGrid = await getCleanGrid(gridItem);
                     let mesh: MeshGeometry;
 
-                    // Apply all slices for this grid if enabled
+                    // Apply all I/J/K slices for this grid if enabled
                     if (sliceEnabled && gridSlices[gridItem.id] && gridSlices[gridItem.id].length > 0) {
                         try {
-                            // Render each slice independently from the original grid
+                            // Render each I/J/K slice independently from the original grid
                             const slicePromises = gridSlices[gridItem.id].map(async (slice) => {
-                                let slicedGrid = await invoke<SerializableGrid>('slice_grid', {
+                                const slicedGrid = await invoke<SerializableGrid>('slice_grid', {
                                     grid: cleanGrid,
                                     plane: slice.plane,
                                     index: slice.index,
@@ -496,9 +587,9 @@ export default function Viewer3D({
                                 logger.debug(`Applied ${slice.plane} slice at index ${slice.index}`, 'Viewer3D');
                                 return { sliceId: slice.id, grid: slicedGrid, slice };
                             });
-                            
+
                             const sliceResults = await Promise.all(slicePromises);
-                            
+
                             // Generate meshes for each slice with solution colors if available
                             const sliceMeshes = await Promise.all(
                                 sliceResults.map(async ({ sliceId, grid, slice }) => {
@@ -541,7 +632,7 @@ export default function Viewer3D({
                                     return { sliceId, mesh: sliceMesh };
                                 })
                             );
-                            
+
                             // Merge all slice meshes into one
                             if (sliceMeshes.length > 0) {
                                 const mergedMesh: MeshGeometry = {
@@ -553,7 +644,7 @@ export default function Viewer3D({
                                     vertex_count: 0,
                                     face_count: 0,
                                 };
-                                
+
                                 // Check if all slices have colors before processing them
                                 const allHaveColors = sliceMeshes.every(({ mesh }) => mesh.colors && mesh.colors.length > 0);
                                 void invoke('frontend_log', {
@@ -561,35 +652,35 @@ export default function Viewer3D({
                                 });
                                 sliceMeshes.forEach((sm, idx) => {
                                     void invoke('frontend_log', {
-                                        message: `[Viewer3D]  Slice ${idx}: verts=${sm.mesh.vertices.length/3 | 0}, colors=${sm.mesh.colors?.length || 0}`
+                                        message: `[Viewer3D]  Slice ${idx}: verts=${sm.mesh.vertices.length / 3 | 0}, colors=${sm.mesh.colors?.length || 0}`
                                     });
                                 });
-                                
+
                                 if (allHaveColors) {
                                     mergedMesh.colors = [];
                                 }
-                                
+
                                 for (const { mesh: sliceMesh } of sliceMeshes) {
                                     const vertexOffset = mergedMesh.vertices.length / 3;
-                                    
+
                                     // Append vertices and normals
                                     mergedMesh.vertices.push(...sliceMesh.vertices);
                                     mergedMesh.normals.push(...sliceMesh.normals);
-                                    
+
                                     // Append colors only if we're collecting them from all slices
                                     if (mergedMesh.colors && sliceMesh.colors && sliceMesh.colors.length > 0) {
                                         mergedMesh.colors.push(...sliceMesh.colors);
                                     }
-                                    
+
                                     // Append indices (offset by vertex count)
                                     mergedMesh.indices.push(...sliceMesh.indices.map(idx => idx + vertexOffset));
                                     mergedMesh.triangle_indices.push(...sliceMesh.triangle_indices.map(idx => idx + vertexOffset));
-                                    
+
                                     // Update counts
                                     mergedMesh.vertex_count += sliceMesh.vertex_count;
                                     mergedMesh.face_count += sliceMesh.face_count;
                                 }
-                                
+
                                 // Verify colors array matches vertices
                                 logger.debug(`Merged: vertices=${mergedMesh.vertices.length}, colors=${mergedMesh.colors?.length ?? 0}`, 'Viewer3D');
                                 if (mergedMesh.colors && mergedMesh.colors.length > 0) {
@@ -615,7 +706,7 @@ export default function Viewer3D({
                                     });
                                     logger.debug(`No colors in merged mesh (expected for uncolored slices)`, 'Viewer3D');
                                 }
-                                
+
                                 mesh = mergedMesh;
                             } else {
                                 throw new Error('No slice meshes generated');
@@ -659,46 +750,56 @@ export default function Viewer3D({
                     return { id: gridItem.id, error: errorMsg };
                 }
             })
-        ).then((results: MeshResult[]) => {
-            if (isCancelled || requestId !== requestIdRef.current) {
-                return;
-            }
+        );
 
-            void invoke('frontend_log', {
-                message: `[Viewer3D] effect done ms=${Math.round(performance.now() - effectStart)} results=${results.length}`
-            });
+        // Wait for both per-grid slices and arbitrary slices to complete
+        Promise.all([gridSlicePromises, Promise.all(arbitrarySlicePromises)])
+            .then(([gridResults, arbitraryResults]: [MeshResult[], MeshResult[][]]) => {
+                if (isCancelled || requestId !== requestIdRef.current) {
+                    return;
+                }
 
-            lastColorKeyRef.current = currentColorKey;
-            lastSliceKeyRef.current = sliceKey;
+                // Flatten arbitrary results (array of arrays)
+                const flatArbitraryResults = arbitraryResults.flat();
 
-            const errors = results.filter((result) => "error" in result) as { id: string; error: string }[];
-            if (errors.length > 0) {
-                const errorDetails = errors.map(e => `${e.id}: ${e.error}`).join('\n');
-                const errorMsg = `Failed to convert ${errors.length} grid(s) to mesh:\n${errorDetails}`;
-                logger.error(errorMsg, 'Viewer3D');
-                setError(errorMsg);
-            }
-
-            setMeshById((prev) => {
-                const next = { ...prev };
-                results.forEach((result) => {
-                    if ("mesh" in result) {
-                        next[result.id] = result.mesh;
-                    }
+                void invoke('frontend_log', {
+                    message: `[Viewer3D] effect done ms=${Math.round(performance.now() - effectStart)} gridResults=${gridResults.length} arbitraryResults=${flatArbitraryResults.length}`
                 });
-                return next;
-            });
 
-            setLoadingById((prev) => {
-                const next = { ...prev };
-                results.forEach((result) => {
-                    if (next[result.id] === requestId) {
-                        delete next[result.id];
-                    }
+                lastColorKeyRef.current = currentColorKey;
+                lastSliceKeyRef.current = sliceKey;
+
+                // Combine both result sets
+                const allResults = [...gridResults, ...flatArbitraryResults];
+
+                const errors = allResults.filter((result) => "error" in result) as { id: string; error: string }[];
+                if (errors.length > 0) {
+                    const errorDetails = errors.map(e => `${e.id}: ${e.error}`).join('\n');
+                    const errorMsg = `Failed to convert ${errors.length} grid(s) to mesh:\n${errorDetails}`;
+                    logger.error(errorMsg, 'Viewer3D');
+                    setError(errorMsg);
+                }
+
+                setMeshById((prev) => {
+                    const next = { ...prev };
+                    allResults.forEach((result) => {
+                        if ("mesh" in result) {
+                            next[result.id] = result.mesh;
+                        }
+                    });
+                    return next;
                 });
-                return next;
+
+                setLoadingById((prev) => {
+                    const next = { ...prev };
+                    allResults.forEach((result) => {
+                        if (next[result.id] === requestId) {
+                            delete next[result.id];
+                        }
+                    });
+                    return next;
+                });
             });
-        });
 
         return () => {
             isCancelled = true;
@@ -715,11 +816,16 @@ export default function Viewer3D({
                 message: `[Viewer3D] effect cancelled ms=${Math.round(performance.now() - effectStart)}`
             });
         };
-    }, [grids, ignoreIblank, scalarField, colorScheme, meshById, sliceEnabled, gridSlices]);
+    }, [grids, ignoreIblank, scalarField, colorScheme, sliceEnabled, gridSlices, appliedSlicesKey]);
 
     const visibleGrids = useMemo(
         () => getVisibleGridItems(grids, selectedGridIds, isolateSelected),
         [grids, isolateSelected, selectedGridIds]
+    );
+
+    const enabledArbitraryIds = useMemo(
+        () => new Set((arbitrarySlices || []).filter(s => s.applied && s.enabled).map(s => s.id)),
+        [arbitrarySlices]
     );
 
     const stats = useMemo(() => {
@@ -783,6 +889,46 @@ export default function Viewer3D({
                         </group>
                     );
                 })}
+
+                {/* Render arbitrary cutting plane meshes */}
+                {Object.entries(meshById)
+                    .filter(([id]) => {
+                        if (!id.startsWith('arbitrary::')) return false;
+                        const parts = id.split('::');
+                        const sliceId = parts[1];
+                        return enabledArbitraryIds.has(sliceId);
+                    })
+                    .map(([id, mesh]) => {
+                        // Arbitrary slices use a fixed color (light blue)
+                        const sliceColor = '#60a5fa';
+                        return (
+                            <group key={id}>
+                                {shadingMode === 'smooth' && (
+                                    <SolidMeshRenderer
+                                        meshGeometry={mesh}
+                                        color={sliceColor}
+                                        dimmed={false}
+                                        flatShading={false}
+                                    />
+                                )}
+                                {shadingMode === 'flat' && (
+                                    <SolidMeshRenderer
+                                        meshGeometry={mesh}
+                                        color={sliceColor}
+                                        dimmed={false}
+                                        flatShading={true}
+                                    />
+                                )}
+                                {showWireframe && (
+                                    <MeshRenderer
+                                        meshGeometry={mesh}
+                                        color={sliceColor}
+                                        dimmed={false}
+                                    />
+                                )}
+                            </group>
+                        );
+                    })}
 
                 {/* Camera controls */}
                 <OrbitControls enableDamping dampingFactor={0.05} />

@@ -385,6 +385,39 @@ fn slice_grid(grid: Plot3DGrid, plane: String, index: u32) -> Result<Plot3DGrid,
     })
 }
 
+/// Slice a PLOT3D grid with an arbitrary cutting plane
+/// plane_point: [x, y, z] coordinates of a point on the plane
+/// plane_normal: [nx, ny, nz] normal vector to the plane
+#[tauri::command]
+fn slice_arbitrary_plane(
+    grid: Plot3DGrid,
+    plane_point: [f32; 3],
+    plane_normal: [f32; 3],
+    _window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    log_debug(&format!(
+        "Slicing grid with arbitrary plane: point={:?}, normal={:?}",
+        plane_point, plane_normal
+    ));
+
+    let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+
+    match &result {
+        Ok(mesh) => {
+            log_info(&format!(
+                "Arbitrary plane slice generated: {} vertices, {} triangles",
+                mesh.vertex_count,
+                mesh.triangle_indices.len() / 3
+            ));
+        }
+        Err(e) => {
+            log_error(&format!("Failed to slice arbitrary plane: {}", e));
+        }
+    }
+
+    result
+}
+
 #[derive(Deserialize)]
 struct ComputeSolutionColorsArgs {
     grid: Plot3DGrid,
@@ -1042,6 +1075,7 @@ pub fn run() {
             load_plot3d_function,
             convert_grid_to_mesh,
             slice_grid,
+            slice_arbitrary_plane,
             compute_solution_colors,
             compute_solution_colors_cached,
             compute_solution_colors_only_cached,

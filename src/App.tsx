@@ -22,7 +22,7 @@ import { LoadingIndicator } from "./components/LoadingIndicator";
 import { logger } from "./utils/logger";
 import { groupGridsByFile } from "./utils/gridUtils";
 import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
-import type { GridItem, GridSlice } from "./types/grids";
+import type { GridItem, GridSlice, ArbitrarySlice } from "./types/grids";
 import type { ScalarField } from "./utils/solutionData";
 import type { ColorScheme } from "./utils/colorMapping";
 import "./App.css";
@@ -80,6 +80,7 @@ const App = () => {
   const [loadingMessage, setLoadingMessage] = useState("Processing...");
 
   const [gridSlices, setGridSlices] = useState<Record<string, GridSlice[]>>({});
+  const [arbitrarySlices, setArbitrarySlices] = useState<ArbitrarySlice[]>([]);
 
   const getGridSlices = (gridId: string): GridSlice[] => gridSlices[gridId] || [];
 
@@ -113,6 +114,51 @@ const App = () => {
         s.id === sliceId ? { ...s, ...updates } : s
       )
     }));
+  };
+
+  // Arbitrary slice management
+  const addArbitrarySlice = () => {
+    const newSlice: ArbitrarySlice = {
+      id: `arbitrary_${Date.now()}`,
+      name: `Plane ${arbitrarySlices.length + 1}`,
+      planePoint: [0, 0, 0],
+      planeNormal: [0, 0, 1],
+      enabled: true,
+      applied: false,
+      applyVersion: 0,
+      dirty: true
+    };
+    setArbitrarySlices(prev => [...prev, newSlice]);
+  };
+
+  const removeArbitrarySlice = (sliceId: string) => {
+    setArbitrarySlices(prev => prev.filter(s => s.id !== sliceId));
+  };
+
+  const updateArbitrarySlice = (sliceId: string, updates: Partial<ArbitrarySlice>) => {
+    setArbitrarySlices(prev => prev.map(s => {
+      if (s.id !== sliceId) return s;
+      // If updating plane parameters (point/normal), mark as dirty but keep applied state
+      const updatedSlice = { ...s, ...updates };
+      if (updates.planePoint || updates.planeNormal) {
+        updatedSlice.dirty = true;
+      }
+      return updatedSlice;
+    }));
+  };
+
+  const toggleArbitrarySlice = (sliceId: string) => {
+    setArbitrarySlices(prev => prev.map(s =>
+      s.id === sliceId ? { ...s, enabled: !s.enabled } : s
+    ));
+  };
+
+  const applyArbitrarySlice = (sliceId: string) => {
+    setArbitrarySlices(prev => prev.map(s =>
+      s.id === sliceId
+        ? { ...s, applied: true, dirty: false, applyVersion: s.applyVersion + 1 }
+        : s
+    ));
   };
 
   // Debug: Log whenever loading state changes
@@ -526,6 +572,218 @@ const App = () => {
                   </div>
                 )}
 
+                {/* Cutting Planes Section */}
+                <div style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: '2px solid #334155' }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '6px',
+                    paddingBottom: '4px',
+                    borderBottom: '1px solid #334155'
+                  }}>
+                    <span style={{ fontSize: '10px', fontWeight: '600', color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Cutting Planes
+                    </span>
+                    <button
+                      onClick={addArbitrarySlice}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '9px',
+                        background: '#059669',
+                        border: 'none',
+                        color: 'white',
+                        borderRadius: '3px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {arbitrarySlices.length === 0 && (
+                    <div style={{ fontSize: '9px', color: '#64748b', fontStyle: 'italic', padding: '2px 0' }}>
+                      No planes
+                    </div>
+                  )}
+
+                  {arbitrarySlices.map((slice) => (
+                    <div
+                      key={slice.id}
+                      style={{
+                        background: '#0a0e1a',
+                        borderRadius: '3px',
+                        padding: '4px',
+                        marginBottom: '4px',
+                        border: slice.enabled ? '1px solid #3b82f6' : '1px solid #334155'
+                      }}
+                    >
+                      <div style={{ display: 'flex', gap: '3px', alignItems: 'center', marginBottom: '4px' }}>
+                        <input
+                          type="text"
+                          value={slice.name}
+                          onChange={(e) => updateArbitrarySlice(slice.id, { name: e.target.value })}
+                          style={{
+                            flex: 1,
+                            padding: '1px 4px',
+                            background: '#1a2640',
+                            color: '#e2e8f0',
+                            border: '1px solid #334155',
+                            borderRadius: '2px',
+                            fontSize: '9px',
+                            minWidth: 0
+                          }}
+                        />
+                        <button
+                          onClick={() => toggleArbitrarySlice(slice.id)}
+                          style={{
+                            padding: '1px 5px',
+                            fontSize: '9px',
+                            background: slice.enabled ? '#3b82f6' : '#475569',
+                            border: 'none',
+                            color: 'white',
+                            borderRadius: '2px',
+                            cursor: 'pointer',
+                            lineHeight: 1
+                          }}
+                        >
+                          {slice.enabled ? '👁' : '⚫'}
+                        </button>
+                        <button
+                          onClick={() => removeArbitrarySlice(slice.id)}
+                          style={{
+                            padding: '1px 4px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#ef4444',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            lineHeight: 1
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '2px', marginBottom: '3px' }}>
+                        {['X', 'Y', 'Z'].map((axis, idx) => (
+                          <input
+                            key={axis}
+                            type="text"
+                            inputMode="decimal"
+                            defaultValue={slice.planePoint[idx]}
+                            onBlur={(e) => {
+                              const parsed = parseFloat(e.target.value);
+                              if (!isNaN(parsed)) {
+                                const newPoint = [...slice.planePoint] as [number, number, number];
+                                newPoint[idx] = parsed;
+                                updateArbitrarySlice(slice.id, { planePoint: newPoint });
+                              } else {
+                                // Reset to current value if invalid
+                                e.target.value = slice.planePoint[idx].toString();
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const parsed = parseFloat(e.currentTarget.value);
+                                if (!isNaN(parsed)) {
+                                  const newPoint = [...slice.planePoint] as [number, number, number];
+                                  newPoint[idx] = parsed;
+                                  updateArbitrarySlice(slice.id, { planePoint: newPoint });
+                                  applyArbitrarySlice(slice.id);
+                                } else {
+                                  e.currentTarget.value = slice.planePoint[idx].toString();
+                                }
+                              }
+                            }}
+                            placeholder={`P${axis}`}
+                            title={`Point ${axis}`}
+                            style={{
+                              padding: '1px 2px',
+                              background: '#1a2640',
+                              color: '#e2e8f0',
+                              border: '1px solid #334155',
+                              borderRadius: '2px',
+                              fontSize: '8px',
+                              minWidth: 0,
+                              textAlign: 'center'
+                            }}
+                          />
+                        ))}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '2px' }}>
+                        {['X', 'Y', 'Z'].map((axis, idx) => (
+                          <input
+                            key={axis}
+                            type="text"
+                            inputMode="decimal"
+                            defaultValue={slice.planeNormal[idx]}
+                            onBlur={(e) => {
+                              const parsed = parseFloat(e.target.value);
+                              if (!isNaN(parsed)) {
+                                const newNormal = [...slice.planeNormal] as [number, number, number];
+                                newNormal[idx] = parsed;
+                                updateArbitrarySlice(slice.id, { planeNormal: newNormal });
+                              } else {
+                                // Reset to current value if invalid
+                                e.target.value = slice.planeNormal[idx].toString();
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const parsed = parseFloat(e.currentTarget.value);
+                                if (!isNaN(parsed)) {
+                                  const newNormal = [...slice.planeNormal] as [number, number, number];
+                                  newNormal[idx] = parsed;
+                                  updateArbitrarySlice(slice.id, { planeNormal: newNormal });
+                                  applyArbitrarySlice(slice.id);
+                                } else {
+                                  e.currentTarget.value = slice.planeNormal[idx].toString();
+                                }
+                              }
+                            }}
+                            placeholder={`N${axis}`}
+                            title={`Normal ${axis}`}
+                            style={{
+                              padding: '1px 2px',
+                              background: '#1a2640',
+                              color: '#e2e8f0',
+                              border: '1px solid #334155',
+                              borderRadius: '2px',
+                              fontSize: '8px',
+                              minWidth: 0,
+                              textAlign: 'center'
+                            }}
+                          />
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          if (slice.dirty) applyArbitrarySlice(slice.id);
+                        }}
+                        disabled={!slice.dirty}
+                        style={{
+                          width: '100%',
+                          marginTop: '4px',
+                          padding: '3px 6px',
+                          fontSize: '9px',
+                          background: slice.applied && !slice.dirty ? '#10b981' : '#059669',
+                          border: 'none',
+                          color: 'white',
+                          borderRadius: '2px',
+                          cursor: slice.dirty ? 'pointer' : 'not-allowed',
+                          fontWeight: slice.applied && !slice.dirty ? 'bold' : 'normal',
+                          opacity: slice.dirty ? 1 : 0.7
+                        }}
+                      >
+                        {slice.applied && !slice.dirty ? '✓ Applied' : 'Apply'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <strong style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Grids</strong>
                   <div style={{ fontSize: '12px', color: '#94a3b8' }}>
@@ -670,89 +928,8 @@ const App = () => {
                                       }}
                                     />
                                     Grid {grid.gridIndex + 1}
-                                    {grid.solution && (
-                                      <span style={{ fontSize: '10px', color: '#10b981' }}>●</span>
-                                    )}
                                   </span>
                                 </button>
-
-                                {/* Slices dropdown - compact inline trigger */}
-                                {sliceEnabled && (
-                                  <details className="slice-details" style={{ background: '#0a0e1a', borderRadius: '4px' }}>
-                                    <summary style={{ cursor: 'pointer', padding: '3px 6px', fontSize: '10px', color: '#cbd5e1', userSelect: 'none' }}>
-                                      ({getGridSlices(grid.id).length} slice{getGridSlices(grid.id).length !== 1 ? 's' : ''})
-                                    </summary>
-                                    <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 6px 6px 6px', paddingRight: '12px' }}>
-                                      {getGridSlices(grid.id).map((slice) => {
-                                        const dims = grid.grid.dimensions;
-                                        const maxIdx = slice.plane === 'I' ? dims.i : slice.plane === 'J' ? dims.j : dims.k;
-                                        return (
-                                          <div key={slice.id} style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '11px', color: '#cbd5e1' }}>
-                                            <select
-                                              value={slice.plane}
-                                              onChange={(e) => updateGridSlice(grid.id, slice.id, { plane: e.target.value as 'I' | 'J' | 'K' })}
-                                              style={{
-                                                padding: '2px 4px',
-                                                background: '#1a2640',
-                                                color: '#e2e8f0',
-                                                border: '1px solid #334155',
-                                                borderRadius: '3px',
-                                                fontSize: '10px'
-                                              }}
-                                            >
-                                              <option value="I">I</option>
-                                              <option value="J">J</option>
-                                              <option value="K">K</option>
-                                            </select>
-                                            <input
-                                              type="range"
-                                              min={0}
-                                              max={Math.max(0, maxIdx - 1)}
-                                              value={slice.index}
-                                              onChange={(e) => updateGridSlice(grid.id, slice.id, { index: parseInt(e.target.value) })}
-                                              style={{ flex: 1, height: '12px', minWidth: '80px' }}
-                                            />
-                                            <span style={{ minWidth: '18px', textAlign: 'right' }}>{slice.index + 1}</span>
-                                            <button
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                removeSliceFromGrid(grid.id, slice.id);
-                                              }}
-                                              style={{
-                                                flex: '0 0 18px',
-                                                background: 'transparent',
-                                                border: 'none',
-                                                color: '#ef4444',
-                                                cursor: 'pointer',
-                                                padding: '0 4px',
-                                                fontSize: '12px'
-                                              }}
-                                            >
-                                              ✕
-                                            </button>
-                                          </div>
-                                        );
-                                      })}
-                                      <button
-                                        onClick={() => addSliceToGrid(grid.id)}
-                                        style={{
-                                          marginTop: '4px',
-                                          padding: '2px 6px',
-                                          fontSize: '10px',
-                                          background: '#1d4ed8',
-                                          border: 'none',
-                                          color: 'white',
-                                          borderRadius: '3px',
-                                          cursor: 'pointer'
-                                        }}
-                                      >
-                                        + Add slice
-                                      </button>
-                                    </div>
-                                  </details>
-                                )}
                               </div>
                             );
                           })}
@@ -800,6 +977,7 @@ const App = () => {
               shadingMode={shadingMode}
               sliceEnabled={sliceEnabled}
               gridSlices={gridSlices}
+              arbitrarySlices={arbitrarySlices}
               onSlicesChange={setGridSlices}
               onLoadingChange={handleViewer3DLoadingChange}
             />

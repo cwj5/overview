@@ -266,6 +266,270 @@ impl Plot3DGrid {
         }
     }
 
+    /// Create an arbitrary cutting plane through the grid
+    /// plane_point: A point on the plane [x, y, z]
+    /// plane_normal: Normal vector to the plane [nx, ny, nz] (will be normalized)
+    /// Returns a mesh geometry representing the intersection
+    pub fn slice_arbitrary_plane(
+        &self,
+        plane_point: [f32; 3],
+        plane_normal: [f32; 3],
+    ) -> Result<MeshGeometry, String> {
+        let i = self.dimensions.i as usize;
+        let j = self.dimensions.j as usize;
+        let k = self.dimensions.k as usize;
+
+        // Normalize the plane normal
+        let normal_mag = (plane_normal[0] * plane_normal[0]
+            + plane_normal[1] * plane_normal[1]
+            + plane_normal[2] * plane_normal[2])
+            .sqrt();
+
+        if normal_mag < 1e-10 {
+            return Err("Plane normal vector has zero magnitude".to_string());
+        }
+
+        let n = [
+            plane_normal[0] / normal_mag,
+            plane_normal[1] / normal_mag,
+            plane_normal[2] / normal_mag,
+        ];
+
+        // Plane equation: n·(p - p0) = 0, or n·p = d where d = n·p0
+        let d = n[0] * plane_point[0] + n[1] * plane_point[1] + n[2] * plane_point[2];
+
+        // Helper function to compute signed distance from plane
+        let signed_distance =
+            |x: f32, y: f32, z: f32| -> f32 { n[0] * x + n[1] * y + n[2] * z - d };
+
+        // Helper function to get grid point coordinates
+        let get_point = |i_idx: usize, j_idx: usize, k_idx: usize| -> [f32; 3] {
+            let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+            [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
+        };
+
+        // Helper function to check if edge crosses the plane and compute intersection
+        let edge_plane_intersection =
+            |p1: [f32; 3], p2: [f32; 3], dist1: f32, dist2: f32| -> Option<[f32; 3]> {
+                // If signs differ, the edge crosses the plane
+                if dist1 * dist2 < 0.0 {
+                    // Linear interpolation parameter
+                    let t = -dist1 / (dist2 - dist1);
+                    Some([
+                        p1[0] + t * (p2[0] - p1[0]),
+                        p1[1] + t * (p2[1] - p1[1]),
+                        p1[2] + t * (p2[2] - p1[2]),
+                    ])
+                } else {
+                    None
+                }
+            };
+
+        // Collect all intersection points and edges
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        // Process each hexahedral cell in the structured grid
+        for k_idx in 0..k - 1 {
+            for j_idx in 0..j - 1 {
+                for i_idx in 0..i - 1 {
+                    // Get the 8 corners of the hexahedron
+                    let corners = [
+                        get_point(i_idx, j_idx, k_idx),             // 0
+                        get_point(i_idx + 1, j_idx, k_idx),         // 1
+                        get_point(i_idx + 1, j_idx + 1, k_idx),     // 2
+                        get_point(i_idx, j_idx + 1, k_idx),         // 3
+                        get_point(i_idx, j_idx, k_idx + 1),         // 4
+                        get_point(i_idx + 1, j_idx, k_idx + 1),     // 5
+                        get_point(i_idx + 1, j_idx + 1, k_idx + 1), // 6
+                        get_point(i_idx, j_idx + 1, k_idx + 1),     // 7
+                    ];
+
+                    // Compute signed distances for all corners
+                    let distances: Vec<f32> = corners
+                        .iter()
+                        .map(|p| signed_distance(p[0], p[1], p[2]))
+                        .collect();
+
+                    // Check if plane intersects this cell
+                    let min_dist = distances.iter().cloned().fold(f32::INFINITY, f32::min);
+                    let max_dist = distances.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+
+                    if min_dist > 0.0 || max_dist < 0.0 {
+                        // Plane doesn't intersect this cell
+                        continue;
+                    }
+
+                    // Find edge intersections (12 edges per hexahedron)
+                    let edges = [
+                        (0, 1),
+                        (1, 2),
+                        (2, 3),
+                        (3, 0), // Bottom face
+                        (4, 5),
+                        (5, 6),
+                        (6, 7),
+                        (7, 4), // Top face
+                        (0, 4),
+                        (1, 5),
+                        (2, 6),
+                        (3, 7), // Vertical edges
+                    ];
+
+                    let mut cell_intersections = Vec::new();
+                    for (v1, v2) in &edges {
+                        if let Some(intersection_point) = edge_plane_intersection(
+                            corners[*v1],
+                            corners[*v2],
+                            distances[*v1],
+                            distances[*v2],
+                        ) {
+                            cell_intersections.push(intersection_point);
+                        }
+                    }
+
+                    // If we have at least 3 intersection points, we can form a polygon
+                    if cell_intersections.len() >= 3 {
+                        // Sort points to form a proper polygon (use centroid-based sorting)
+                        let centroid = cell_intersections.iter().fold([0.0, 0.0, 0.0], |acc, p| {
+                            [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]]
+                        });
+                        let centroid = [
+                            centroid[0] / cell_intersections.len() as f32,
+                            centroid[1] / cell_intersections.len() as f32,
+                            centroid[2] / cell_intersections.len() as f32,
+                        ];
+
+                        // Create a local coordinate system for sorting
+                        // Use the plane normal as the z-axis
+                        let ez = n;
+
+                        // Create arbitrary perpendicular vectors for local x and y
+                        let ex = if ez[0].abs() < 0.9 {
+                            let temp = [1.0, 0.0, 0.0];
+                            let cross = [
+                                temp[1] * ez[2] - temp[2] * ez[1],
+                                temp[2] * ez[0] - temp[0] * ez[2],
+                                temp[0] * ez[1] - temp[1] * ez[0],
+                            ];
+                            let mag =
+                                (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2])
+                                    .sqrt();
+                            [cross[0] / mag, cross[1] / mag, cross[2] / mag]
+                        } else {
+                            let temp = [0.0, 1.0, 0.0];
+                            let cross = [
+                                temp[1] * ez[2] - temp[2] * ez[1],
+                                temp[2] * ez[0] - temp[0] * ez[2],
+                                temp[0] * ez[1] - temp[1] * ez[0],
+                            ];
+                            let mag =
+                                (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2])
+                                    .sqrt();
+                            [cross[0] / mag, cross[1] / mag, cross[2] / mag]
+                        };
+
+                        // Compute angles and sort
+                        let mut indexed_points: Vec<(usize, f32)> = cell_intersections
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, p)| {
+                                let rel =
+                                    [p[0] - centroid[0], p[1] - centroid[1], p[2] - centroid[2]];
+                                let x = rel[0] * ex[0] + rel[1] * ex[1] + rel[2] * ex[2];
+                                let ey = [
+                                    ez[1] * ex[2] - ez[2] * ex[1],
+                                    ez[2] * ex[0] - ez[0] * ex[2],
+                                    ez[0] * ex[1] - ez[1] * ex[0],
+                                ];
+                                let y = rel[0] * ey[0] + rel[1] * ey[1] + rel[2] * ey[2];
+                                let angle = y.atan2(x);
+                                (idx, angle)
+                            })
+                            .collect();
+
+                        indexed_points.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+                        // Add sorted vertices and create triangle fan from centroid
+                        let base_vertex_idx = vertices.len() / 3;
+
+                        for (idx, _) in &indexed_points {
+                            let p = cell_intersections[*idx];
+                            vertices.push(p[0]);
+                            vertices.push(p[1]);
+                            vertices.push(p[2]);
+                        }
+
+                        // Create triangle fan for this polygon
+                        for i in 1..indexed_points.len() - 1 {
+                            indices.push(base_vertex_idx as u32);
+                            indices.push((base_vertex_idx + i) as u32);
+                            indices.push((base_vertex_idx + i + 1) as u32);
+                        }
+                    }
+                }
+            }
+        }
+
+        if vertices.is_empty() {
+            return Err("No intersection found between plane and grid".to_string());
+        }
+
+        // Compute normals for lighting
+        let vertex_count = vertices.len() / 3;
+        let mut normals = vec![0.0; vertices.len()];
+
+        // For each triangle, compute face normal and add to vertices
+        for tri_idx in 0..indices.len() / 3 {
+            let i0 = indices[tri_idx * 3] as usize;
+            let i1 = indices[tri_idx * 3 + 1] as usize;
+            let i2 = indices[tri_idx * 3 + 2] as usize;
+
+            let v0 = [vertices[i0 * 3], vertices[i0 * 3 + 1], vertices[i0 * 3 + 2]];
+            let v1 = [vertices[i1 * 3], vertices[i1 * 3 + 1], vertices[i1 * 3 + 2]];
+            let v2 = [vertices[i2 * 3], vertices[i2 * 3 + 1], vertices[i2 * 3 + 2]];
+
+            let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+
+            let face_normal = [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ];
+
+            // Add face normal to each vertex normal
+            for &vi in &[i0, i1, i2] {
+                normals[vi * 3] += face_normal[0];
+                normals[vi * 3 + 1] += face_normal[1];
+                normals[vi * 3 + 2] += face_normal[2];
+            }
+        }
+
+        // Normalize vertex normals
+        for i in 0..vertex_count {
+            let nx = normals[i * 3];
+            let ny = normals[i * 3 + 1];
+            let nz = normals[i * 3 + 2];
+            let mag = (nx * nx + ny * ny + nz * nz).sqrt();
+            if mag > 1e-10 {
+                normals[i * 3] /= mag;
+                normals[i * 3 + 1] /= mag;
+                normals[i * 3 + 2] /= mag;
+            }
+        }
+
+        Ok(MeshGeometry {
+            vertices,
+            indices: indices.clone(), // Use same indices for wireframe
+            triangle_indices: indices,
+            normals,
+            vertex_count,
+            face_count: vertex_count / 3,
+            colors: None,
+        })
+    }
+
     /// Convert PLOT3D grid to Three.js mesh geometry with optional decimation
     /// decimation_factor: 1 = full resolution, 2 = half, 3 = third, etc.
     /// This creates quad edges for wireframe display (4 edges per quad, no triangulation)
@@ -3007,5 +3271,152 @@ mod tests {
         assert_eq!(meta.byte_order, "N/A");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_arbitrary_plane_horizontal() {
+        // Create a simple 2x2x2 grid (unit cube)
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords: vec![
+                0.0, 1.0, 0.0, 1.0, // k=0
+                0.0, 1.0, 0.0, 1.0, // k=1
+            ],
+            y_coords: vec![
+                0.0, 0.0, 1.0, 1.0, // k=0
+                0.0, 0.0, 1.0, 1.0, // k=1
+            ],
+            z_coords: vec![
+                0.0, 0.0, 0.0, 0.0, // k=0
+                1.0, 1.0, 1.0, 1.0, // k=1
+            ],
+            iblank: None,
+        };
+
+        // Horizontal plane at z=0.5 (normal pointing up)
+        let plane_point = [0.5, 0.5, 0.5];
+        let plane_normal = [0.0, 0.0, 1.0];
+
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        assert!(result.is_ok(), "Failed to slice grid: {:?}", result.err());
+
+        let mesh = result.unwrap();
+        assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
+        assert!(mesh.triangle_indices.len() > 0, "Should have triangles");
+
+        // All vertices should have z ≈ 0.5
+        for i in (0..mesh.vertices.len()).step_by(3) {
+            let z = mesh.vertices[i + 2];
+            assert!(
+                (z - 0.5).abs() < 0.01,
+                "Vertex z-coordinate {} should be near 0.5",
+                z
+            );
+        }
+    }
+
+    #[test]
+    fn test_arbitrary_plane_diagonal() {
+        // Create a larger grid to ensure intersection
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 3 },
+            x_coords: (0..27)
+                .map(|idx| {
+                    let i = idx % 3;
+                    i as f32
+                })
+                .collect(),
+            y_coords: (0..27)
+                .map(|idx| {
+                    let j = (idx / 3) % 3;
+                    j as f32
+                })
+                .collect(),
+            z_coords: (0..27)
+                .map(|idx| {
+                    let k = idx / 9;
+                    k as f32
+                })
+                .collect(),
+            iblank: None,
+        };
+
+        // Diagonal plane: x + y + z = 1.5 (cuts through center of grid)
+        // Normal = (1, 1, 1), Point = (0.5, 0.5, 0.5)
+        let plane_point = [0.5, 0.5, 0.5];
+        let plane_normal = [1.0, 1.0, 1.0];
+
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        assert!(
+            result.is_ok(),
+            "Failed to slice diagonal plane: {:?}",
+            result.err()
+        );
+
+        let mesh = result.unwrap();
+        assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
+
+        // Verify points lie on the plane: n·(p - p0) ≈ 0
+        let norm_mag = (3.0_f32).sqrt();
+        let n = [1.0 / norm_mag, 1.0 / norm_mag, 1.0 / norm_mag];
+
+        for i in (0..mesh.vertices.len()).step_by(3) {
+            let x = mesh.vertices[i];
+            let y = mesh.vertices[i + 1];
+            let z = mesh.vertices[i + 2];
+
+            let dot = n[0] * (x - plane_point[0])
+                + n[1] * (y - plane_point[1])
+                + n[2] * (z - plane_point[2]);
+
+            assert!(
+                dot.abs() < 0.01,
+                "Vertex ({}, {}, {}) should be on plane, dot product: {}",
+                x,
+                y,
+                z,
+                dot
+            );
+        }
+    }
+
+    #[test]
+    fn test_arbitrary_plane_no_intersection() {
+        // Create a small grid at origin
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords: vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            y_coords: vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+            z_coords: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            iblank: None,
+        };
+
+        // Plane far away from the grid
+        let plane_point = [10.0, 10.0, 10.0];
+        let plane_normal = [0.0, 0.0, 1.0];
+
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        assert!(
+            result.is_err(),
+            "Should fail when plane doesn't intersect grid"
+        );
+    }
+
+    #[test]
+    fn test_arbitrary_plane_zero_normal() {
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords: vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            y_coords: vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+            z_coords: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            iblank: None,
+        };
+
+        // Zero normal vector should fail
+        let plane_point = [0.5, 0.5, 0.5];
+        let plane_normal = [0.0, 0.0, 0.0];
+
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        assert!(result.is_err(), "Should fail with zero normal vector");
     }
 }

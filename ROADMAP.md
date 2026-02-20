@@ -30,6 +30,16 @@ This document outlines the future development work needed to create a full-featu
 - Pre-allocated arrays eliminate reallocation overhead during mesh creation
 - Frustum culling and bounding spheres skip rendering off-screen meshes
 - Decimation thresholds: >1000 cells = 4x, >500 = 3x, >250 = 2x, ≤250 = full resolution
+
+**Arbitrary Cutting Planes (v0.2.2 - February 2026)**
+- Implemented marching cells algorithm for hexahedral grid-plane intersection
+- Plane defined by point (3D coordinates) and normal vector (automatically normalized)
+- Polygon extraction uses centroid-based angular sorting for proper winding order
+- Edge-plane intersections use linear interpolation (parametric equations)
+- Triangle fan tessellation from sorted polygon vertices
+- Handles edge cases: zero normal, no intersection, degenerate cells
+- UI provides numeric inputs for plane point (X,Y,Z) and normal (X,Y,Z)
+- Future: Add solution field interpolation and interactive plane manipulation widgets
 ## Current Status ✅
 
 **✨ Version: 0.2.0 (Multi-Grid Support) - In Progress**
@@ -149,7 +159,14 @@ This document outlines the future development work needed to create a full-featu
   - [x] Add/remove slices dynamically
   - [x] Slice-only rendering (no full-grid fallback; no slices = no render)
   - [x] Slices persist across toggle (no auto-recreate on toggle)
-- [ ] Arbitrary cutting planes
+- [x] Arbitrary cutting planes
+  - [x] Plane defined by point and normal vector
+  - [x] Marching cells algorithm for grid-plane intersection
+  - [x] UI controls for plane positioning (point coordinates, normal vector)
+  - [x] Integration with existing slice rendering pipeline
+  - [x] Unit tests for plane intersection logic
+  - [ ] Solution field coloring on arbitrary planes
+  - [ ] Interactive plane manipulation (drag handles, rotation widgets)
 - [ ] Volume rendering for 3D data
 - [ ] Particle injection and flow visualization
 - [ ] Texture mapping support
