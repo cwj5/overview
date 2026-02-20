@@ -82,39 +82,6 @@ const App = () => {
   const [gridSlices, setGridSlices] = useState<Record<string, GridSlice[]>>({});
   const [arbitrarySlices, setArbitrarySlices] = useState<ArbitrarySlice[]>([]);
 
-  const getGridSlices = (gridId: string): GridSlice[] => gridSlices[gridId] || [];
-
-  const addSliceToGrid = (gridId: string) => {
-    const grid = grids.find(g => g.id === gridId);
-    if (!grid) return;
-
-    const newSlice: GridSlice = {
-      id: `${gridId}_${Date.now()}`,
-      plane: 'K',
-      index: 0
-    };
-
-    setGridSlices(prev => ({
-      ...prev,
-      [gridId]: [...(prev[gridId] || []), newSlice]
-    }));
-  };
-
-  const removeSliceFromGrid = (gridId: string, sliceId: string) => {
-    setGridSlices(prev => ({
-      ...prev,
-      [gridId]: (prev[gridId] || []).filter(s => s.id !== sliceId)
-    }));
-  };
-
-  const updateGridSlice = (gridId: string, sliceId: string, updates: Partial<GridSlice>) => {
-    setGridSlices(prev => ({
-      ...prev,
-      [gridId]: (prev[gridId] || []).map(s =>
-        s.id === sliceId ? { ...s, ...updates } : s
-      )
-    }));
-  };
 
   // Arbitrary slice management
   const addArbitrarySlice = () => {
