@@ -110,6 +110,10 @@ button {
   margin-top: 6px;
 }
 
+.slice-details[open] .disclosure-arrow {
+  transform: rotate(90deg);
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;

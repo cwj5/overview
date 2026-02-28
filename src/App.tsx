@@ -128,6 +128,41 @@ const App = () => {
     ));
   };
 
+  // Grid slice management (index-based slicing)
+  const getGridSlices = (gridId: string): GridSlice[] => gridSlices[gridId] || [];
+
+  const addSliceToGrid = (gridId: string) => {
+    // Find the grid to get its dimensions
+    const grid = grids.find(g => g.id === gridId);
+    if (!grid) return;
+
+    const newSlice: GridSlice = {
+      id: `slice_${Date.now()}`,
+      plane: 'K',
+      index: Math.floor(grid.grid.dimensions.k / 2)
+    };
+    setGridSlices(prev => ({
+      ...prev,
+      [gridId]: [...(prev[gridId] || []), newSlice]
+    }));
+  };
+
+  const removeSliceFromGrid = (gridId: string, sliceId: string) => {
+    setGridSlices(prev => ({
+      ...prev,
+      [gridId]: (prev[gridId] || []).filter(s => s.id !== sliceId)
+    }));
+  };
+
+  const updateGridSlice = (gridId: string, sliceId: string, updates: Partial<GridSlice>) => {
+    setGridSlices(prev => ({
+      ...prev,
+      [gridId]: (prev[gridId] || []).map(s =>
+        s.id === sliceId ? { ...s, ...updates } : s
+      )
+    }));
+  };
+
   // Debug: Log whenever loading state changes
   useEffect(() => {
     logger.info(`Loading state changed to: ${loading}`, 'App');
@@ -539,7 +574,7 @@ const App = () => {
                   </div>
                 )}
 
-                {/* Cutting Planes Section */}
+                {/* Arbitrary Planes Section */}
                 <div style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: '2px solid #334155' }}>
                   <div style={{
                     display: 'flex',
@@ -550,7 +585,7 @@ const App = () => {
                     borderBottom: '1px solid #334155'
                   }}>
                     <span style={{ fontSize: '10px', fontWeight: '600', color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Cutting Planes
+                      Arbitrary Planes
                     </span>
                     <button
                       onClick={addArbitrarySlice}
@@ -835,68 +870,225 @@ const App = () => {
                         <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           {group.grids.map((grid) => {
                             const isSelected = selectedGridIds.includes(grid.id);
+                            const dims = grid.grid.dimensions;
                             return (
                               <div
                                 key={grid.id}
                                 style={{
                                   display: 'flex',
-                                  flexWrap: 'wrap',
-                                  alignItems: 'center',
-                                  gap: '6px',
+                                  flexDirection: 'column',
+                                  gap: '4px',
                                   padding: '4px',
                                   borderRadius: '6px',
                                   background: isSelected ? 'rgba(148, 163, 184, 0.2)' : 'transparent',
                                 }}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={grid.visible}
-                                  onChange={(e) => {
-                                    const checked = e.target.checked;
-                                    setGrids((prev) =>
-                                      prev.map((item) =>
-                                        item.id === grid.id
-                                          ? { ...item, visible: checked }
-                                          : item
-                                      )
-                                    );
-                                  }}
-                                />
-                                <button
-                                  onClick={() => {
-                                    setSelectedGridIds((prev) => {
-                                      // Toggle selection: if already selected, remove it; otherwise add it
-                                      if (prev.includes(grid.id)) {
-                                        return prev.filter(id => id !== grid.id);
-                                      } else {
-                                        return [...prev, grid.id];
-                                      }
-                                    });
-                                  }}
-                                  style={{
-                                    flex: 1,
-                                    background: 'transparent',
-                                    border: 'none',
-                                    color: '#e2e8f0',
-                                    textAlign: 'left',
-                                    padding: 0,
-                                    cursor: 'pointer',
-                                    fontSize: '12px'
-                                  }}
-                                >
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                                    <span
-                                      style={{
-                                        width: '10px',
-                                        height: '10px',
-                                        borderRadius: '999px',
-                                        background: grid.color,
-                                        boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.6)'
+                                {/* Index-based slices dropdown */}
+                                {sliceEnabled ? (
+                                  <details className="slice-details">
+                                    <summary style={{
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      listStyle: 'none',
+                                      userSelect: 'none'
+                                    }}>
+                                      <span style={{
+                                        fontSize: '10px',
+                                        color: '#64748b',
+                                        transition: 'transform 0.2s',
+                                        display: 'inline-block',
+                                        width: '12px'
+                                      }}
+                                        className="disclosure-arrow">▶</span>
+                                      <input
+                                        type="checkbox"
+                                        checked={grid.visible}
+                                        onChange={(e) => {
+                                          e.stopPropagation();
+                                          const checked = e.target.checked;
+                                          setGrids((prev) =>
+                                            prev.map((item) =>
+                                              item.id === grid.id
+                                                ? { ...item, visible: checked }
+                                                : item
+                                            )
+                                          );
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                      />
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedGridIds((prev) => {
+                                            // Toggle selection: if already selected, remove it; otherwise add it
+                                            if (prev.includes(grid.id)) {
+                                              return prev.filter(id => id !== grid.id);
+                                            } else {
+                                              return [...prev, grid.id];
+                                            }
+                                          });
+                                        }}
+                                        style={{
+                                          flex: 1,
+                                          background: 'transparent',
+                                          border: 'none',
+                                          color: '#e2e8f0',
+                                          textAlign: 'left',
+                                          padding: 0,
+                                          cursor: 'pointer',
+                                          fontSize: '12px'
+                                        }}
+                                      >
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                          <span
+                                            style={{
+                                              width: '10px',
+                                              height: '10px',
+                                              borderRadius: '999px',
+                                              background: grid.color,
+                                              boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.6)'
+                                            }}
+                                          />
+                                          Grid {grid.gridIndex + 1}
+                                        </span>
+                                      </button>
+                                      <span style={{ fontSize: '10px', color: '#64748b', whiteSpace: 'nowrap' }}>
+                                        {getGridSlices(grid.id).length} index slice{getGridSlices(grid.id).length !== 1 ? 's' : ''}
+                                      </span>
+                                    </summary>
+                                    <div style={{
+                                      marginTop: '4px',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '4px',
+                                      padding: '6px',
+                                      paddingRight: '12px',
+                                      background: '#0a0e1a',
+                                      borderRadius: '4px'
+                                    }}>
+                                      {getGridSlices(grid.id).map((slice) => {
+                                        const maxIdx = slice.plane === 'I' ? dims.i : slice.plane === 'J' ? dims.j : dims.k;
+                                        return (
+                                          <div key={slice.id} style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '11px', color: '#cbd5e1' }}>
+                                            <select
+                                              value={slice.plane}
+                                              onChange={(e) => updateGridSlice(grid.id, slice.id, { plane: e.target.value as 'I' | 'J' | 'K' })}
+                                              style={{
+                                                padding: '2px 4px',
+                                                background: '#1a2640',
+                                                color: '#e2e8f0',
+                                                border: '1px solid #334155',
+                                                borderRadius: '3px',
+                                                fontSize: '10px'
+                                              }}
+                                            >
+                                              <option value="I">I</option>
+                                              <option value="J">J</option>
+                                              <option value="K">K</option>
+                                            </select>
+                                            <input
+                                              type="range"
+                                              min={0}
+                                              max={Math.max(0, maxIdx - 1)}
+                                              value={slice.index}
+                                              onChange={(e) => updateGridSlice(grid.id, slice.id, { index: parseInt(e.target.value) })}
+                                              style={{ flex: 1, height: '12px', minWidth: '80px' }}
+                                            />
+                                            <span style={{ minWidth: '18px', textAlign: 'right' }}>{slice.index + 1}</span>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                removeSliceFromGrid(grid.id, slice.id);
+                                              }}
+                                              style={{
+                                                flex: '0 0 18px',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: '#ef4444',
+                                                cursor: 'pointer',
+                                                padding: '0 4px',
+                                                fontSize: '12px'
+                                              }}
+                                            >
+                                              ✕
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
+                                      <button
+                                        onClick={() => addSliceToGrid(grid.id)}
+                                        style={{
+                                          marginTop: '4px',
+                                          padding: '2px 6px',
+                                          fontSize: '10px',
+                                          background: '#1d4ed8',
+                                          border: 'none',
+                                          color: 'white',
+                                          borderRadius: '3px',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        + Add slice
+                                      </button>
+                                    </div>
+                                  </details>
+                                ) : (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={grid.visible}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setGrids((prev) =>
+                                          prev.map((item) =>
+                                            item.id === grid.id
+                                              ? { ...item, visible: checked }
+                                              : item
+                                          )
+                                        );
                                       }}
                                     />
-                                    Grid {grid.gridIndex + 1}
-                                  </span>
-                                </button>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedGridIds((prev) => {
+                                          // Toggle selection: if already selected, remove it; otherwise add it
+                                          if (prev.includes(grid.id)) {
+                                            return prev.filter(id => id !== grid.id);
+                                          } else {
+                                            return [...prev, grid.id];
+                                          }
+                                        });
+                                      }}
+                                      style={{
+                                        flex: 1,
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#e2e8f0',
+                                        textAlign: 'left',
+                                        padding: 0,
+                                        cursor: 'pointer',
+                                        fontSize: '12px'
+                                      }}
+                                    >
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                        <span
+                                          style={{
+                                            width: '10px',
+                                            height: '10px',
+                                            borderRadius: '999px',
+                                            background: grid.color,
+                                            boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.6)'
+                                          }}
+                                        />
+                                        Grid {grid.gridIndex + 1}
+                                      </span>
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
