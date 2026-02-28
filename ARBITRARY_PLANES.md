@@ -48,18 +48,29 @@ The implementation uses a triangle-based intersection algorithm:
 2. Each triangle is tested for intersection with the plane, including cases where triangle vertices or edges are exactly on the plane
 3. Intersection points are computed using linear interpolation, and exact matches are handled robustly
 4. Segments are formed for each intersected triangle, ensuring all aligned faces and edges are properly registered
-5. The resulting segments are used to render the planar slice
+5. The resulting segments are triangulated to form a solid surface mesh
+
+### Solution Field Interpolation
+For solution field visualization on arbitrary planes:
+1. Each intersection point is tracked with its source hexahedral cell indices (i, j, k)
+2. Linear interpolation weights are computed for the 8 corners of each cell
+3. Solution values (density, momentum, energy, etc.) are interpolated using these weights
+4. Scalar fields (pressure, temperature, Mach number, etc.) are computed from the interpolated conservative variables
+5. Colors are mapped from the scalar field values using the selected color scheme
 
 ### Performance
 - Complexity: O(n) where n is the number of cells
 - Suitable for grids up to ~1M cells
 - Future: GPU-accelerated version for larger datasets
 
+### Current Features
+- **Solution field coloring**: Arbitrary planes now support density/pressure/velocity/energy field visualization with interpolated colors
+- **Triangulated surface**: The plane intersection creates a proper triangulated mesh for solid rendering
+- **Interpolation tracking**: Each vertex on the plane tracks its position within the source hexahedral cell for accurate solution value interpolation
+
 ### Limitations (Current Version)
-- **No solution field coloring**: Arbitrary planes show geometry only (no density/pressure colors yet)
 - **Manual input only**: No interactive drag handles or rotation widgets (planned for future)
 - **No caching**: Plane is recomputed on every parameter change
-- **No polygonal slice output**: The current implementation outputs line segments for each triangle-plane intersection, not full polygons or tessellated triangles
 
 ## Troubleshooting
 
@@ -80,16 +91,18 @@ The implementation uses a triangle-based intersection algorithm:
 - If slices appear incomplete or missing, ensure your plane is not exactly coincident with a grid boundary; the algorithm now handles these cases, but floating-point precision may affect results.
 
 ## Future Enhancements
-- [ ] Solution field interpolation and coloring on arbitrary planes
 - [ ] Interactive 3D widgets for plane manipulation (drag/rotate)
 - [ ] Preset planes (XY at Z, YZ at X, etc.)
 - [ ] Multiple arbitrary planes with boolean operations
 - [ ] Plane equation display (ax + by + cz = d)
 - [ ] Visual plane indicator in the 3D viewport
+- [ ] Caching of computed plane slices for better performance
 
 ## API Reference
 
-### Tauri Command
+### Tauri Commands
+
+#### Basic Plane Slicing (Geometry Only)
 ```rust
 slice_arbitrary_plane(
     grid: Plot3DGrid,
@@ -97,7 +110,24 @@ slice_arbitrary_plane(
     plane_normal: [f32; 3],
 ) -> Result<MeshGeometry, String>
 ```
-*Note: The algorithm now uses triangle-based intersection and robustly handles faces/edges aligned with the plane.*
+Creates a basic plane intersection mesh without solution coloring.
+
+#### Plane Slicing with Solution Colors
+```rust
+compute_solution_colors_arbitrary_plane(
+    grid: Plot3DGrid,
+    grid_index: usize,
+    field: String,
+    color_scheme: String,
+    plane_point: [f32; 3],
+    plane_normal: [f32; 3],
+) -> Result<MeshGeometry, String>
+```
+Creates a plane intersection mesh with interpolated solution field colors.
+- `field`: "density", "pressure", "velocity", "mach", "temperature", or "energy"
+- `color_scheme`: "viridis", "plasma", "inferno", "magma", "turbo", "jet", "rainbow", or "grayscale"
+
+*Note: Both algorithms use triangle-based intersection and robustly handle faces/edges aligned with the plane.*
 
 ### TypeScript Interface
 ```typescript

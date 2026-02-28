@@ -54,6 +54,7 @@ function SolidMeshRenderer({
     dimmed: boolean;
     flatShading?: boolean;
 }) {
+    // Shader for field quantity colors (vertex colors) - both sides equally visible
     const vertexColorMaterial = useMemo(() => {
         return new ShaderMaterial({
             transparent: false,
@@ -94,11 +95,8 @@ function SolidMeshRenderer({
                     float diffuse3 = max(dot(normal, light3), 0.0) * 0.3;
                     float diffuse = diffuse1 + diffuse2 + diffuse3;
                     
-                    if (gl_FrontFacing) {
-                        diffuse = max(diffuse, 0.7); // Front faces have ambient
-                    } else {
-                        diffuse *= 0.3; // Backfaces are nearly black (5% of diffuse)
-                    }
+                    // Both sides equally visible for field quantity visualization
+                    diffuse = max(diffuse, 0.7);
                     
                     vec3 finalColor = vColor * diffuse;
                     gl_FragColor = vec4(finalColor, opacity);
@@ -107,12 +105,77 @@ function SolidMeshRenderer({
         });
     }, []);
 
+    // Shader for grid ID colors (solid color) - backfaces darker for depth perception
+    const solidColorMaterial = useMemo(() => {
+        const hexColor = parseInt(color.replace('#', ''), 16);
+        const r = ((hexColor >> 16) & 255) / 255;
+        const g = ((hexColor >> 8) & 255) / 255;
+        const b = (hexColor & 255) / 255;
+
+        return new ShaderMaterial({
+            transparent: false,
+            depthWrite: true,
+            depthTest: true,
+            side: 2, // DoubleSide
+            uniforms: {
+                opacity: { value: 1.0 },
+                baseColor: { value: [r, g, b] },
+            },
+            vertexShader: `
+                varying vec3 vNormal;
+                void main() {
+                    vNormal = normalize(normalMatrix * normal);
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float opacity;
+                uniform vec3 baseColor;
+                varying vec3 vNormal;
+                void main() {
+                    // Multiple light sources for better global illumination
+                    vec3 light1 = normalize(vec3(0.5, 0.5, 1.0));
+                    vec3 light2 = normalize(vec3(-0.5, -0.3, 0.8));
+                    vec3 light3 = normalize(vec3(0.0, 1.0, 0.3));
+                    vec3 normal = normalize(vNormal);
+                    
+                    // Check if this is a backface
+                    float facing = gl_FrontFacing ? 1.0 : -1.0;
+                    normal *= facing;
+                    
+                    // Apply lighting from multiple sources
+                    float diffuse1 = max(dot(normal, light1), 0.0);
+                    float diffuse2 = max(dot(normal, light2), 0.0) * 0.5;
+                    float diffuse3 = max(dot(normal, light3), 0.0) * 0.3;
+                    float diffuse = diffuse1 + diffuse2 + diffuse3;
+                    
+                    // Differentiate front and back faces for depth perception
+                    if (gl_FrontFacing) {
+                        diffuse = max(diffuse, 0.7); // Front faces have ambient
+                    } else {
+                        diffuse *= 0.3; // Backfaces are darker
+                    }
+                    
+                    vec3 finalColor = baseColor * diffuse;
+                    gl_FragColor = vec4(finalColor, opacity);
+                }
+            `,
+        });
+    }, [color]);
+
     useEffect(() => {
         vertexColorMaterial.transparent = dimmed;
         vertexColorMaterial.depthWrite = !dimmed;
         vertexColorMaterial.uniforms.opacity.value = dimmed ? 0.35 : 1.0;
         vertexColorMaterial.needsUpdate = true;
     }, [dimmed, vertexColorMaterial]);
+
+    useEffect(() => {
+        solidColorMaterial.transparent = dimmed;
+        solidColorMaterial.depthWrite = !dimmed;
+        solidColorMaterial.uniforms.opacity.value = dimmed ? 0.35 : 1.0;
+        solidColorMaterial.needsUpdate = true;
+    }, [dimmed, solidColorMaterial]);
 
     const geometry = useMemo(() => {
         const geo = new BufferGeometry();
@@ -172,15 +235,7 @@ function SolidMeshRenderer({
             {hasColors ? (
                 <primitive object={vertexColorMaterial} attach="material" />
             ) : (
-                <meshStandardMaterial
-                    color={color}
-                    transparent={dimmed}
-                    opacity={dimmed ? 0.35 : 1.0}
-                    flatShading={flatShading}
-                    depthWrite={!dimmed}
-                    depthTest={true}
-                    side={DoubleSide}
-                />
+                <primitive object={solidColorMaterial} attach="material" />
             )}
         </mesh>
     );
@@ -476,11 +531,11 @@ export default function Viewer3D({
             message: `[Viewer3D] Missing grids: ${missing.length} of ${targetGrids.length} (shouldRecolor=${shouldRecolor}, shouldReslice=${shouldReslice})`
         });
 
-        // Regenerate arbitrary slices only if config changed or they're newly enabled
-        const needArbitraryRegen = hasAppliedArbitrarySlices && shouldReslice;
+        // Regenerate arbitrary slices if config changed, field/color changed, or they're newly enabled
+        const needArbitraryRegen = hasAppliedArbitrarySlices && (shouldReslice || shouldRecolor);
 
         void invoke('frontend_log', {
-            message: `[Viewer3D] Arbitrary check: applied=${hasAppliedArbitrarySlices} shouldReslice=${shouldReslice} needRegen=${needArbitraryRegen}`
+            message: `[Viewer3D] Arbitrary check: applied=${hasAppliedArbitrarySlices} shouldReslice=${shouldReslice} shouldRecolor=${shouldRecolor} needRegen=${needArbitraryRegen}`
         });
 
         if (missing.length === 0 && !needArbitraryRegen) {
@@ -526,6 +581,19 @@ export default function Viewer3D({
             return cleanGrid;
         };
 
+        // If arbitrary planes need regeneration, clear existing arbitrary meshes first to avoid remnants
+        if (needArbitraryRegen) {
+            setMeshById((prev) => {
+                const next = { ...prev };
+                Object.keys(next).forEach((id) => {
+                    if (id.startsWith('arbitrary::') || id.startsWith('arbitrary_')) {
+                        delete next[id];
+                    }
+                });
+                return next;
+            });
+        }
+
         // Process arbitrary cutting planes (global - affect ALL grids, not just those with I/J/K slices)
         // Only process if they don't exist yet or if slices have changed
         const arbitrarySlicePromises = needArbitraryRegen
@@ -539,11 +607,48 @@ export default function Viewer3D({
                         grids.map(async (gridItem) => {
                             try {
                                 const cleanGrid = await getCleanGrid(gridItem);
-                                const mesh = await invoke<MeshGeometry>('slice_arbitrary_plane', {
-                                    grid: cleanGrid,
-                                    planePoint: arbitrarySlice.planePoint,
-                                    planeNormal: arbitrarySlice.planeNormal,
-                                });
+                                let mesh: MeshGeometry;
+
+                                // Try to apply solution colors if available
+                                if (gridItem.solution && scalarField !== 'none') {
+                                    try {
+                                        logger.debug(
+                                            `Attempting solution coloring for arbitrary plane '${arbitrarySlice.name}' on grid ${gridItem.id}`,
+                                            'Viewer3D'
+                                        );
+                                        mesh = await invoke<MeshGeometry>('compute_solution_colors_arbitrary_plane', {
+                                            grid: cleanGrid,
+                                            gridIndex: gridItem.gridIndex,
+                                            field: scalarField,
+                                            colorScheme: colorScheme,
+                                            planePoint: arbitrarySlice.planePoint,
+                                            planeNormal: arbitrarySlice.planeNormal,
+                                        });
+                                        const hasColors = mesh.colors && mesh.colors.length > 0;
+                                        void invoke('frontend_log', {
+                                            message: `[Viewer3D] Arbitrary plane '${arbitrarySlice.name}': Colors ${hasColors ? 'YES' : 'NO'} (${mesh.colors?.length || 0} values)`
+                                        });
+                                    } catch (colorErr) {
+                                        // Fall back to non-colored geometry if solution coloring fails
+                                        void invoke('frontend_log', {
+                                            message: `[Viewer3D] Solution coloring FAILED on arbitrary plane '${arbitrarySlice.name}': ${colorErr}`
+                                        });
+                                        logger.error(`Solution coloring on arbitrary plane failed: ${colorErr}`, 'Viewer3D');
+                                        mesh = await invoke<MeshGeometry>('slice_arbitrary_plane', {
+                                            grid: cleanGrid,
+                                            planePoint: arbitrarySlice.planePoint,
+                                            planeNormal: arbitrarySlice.planeNormal,
+                                        });
+                                    }
+                                } else {
+                                    // No solution data - use base geometry
+                                    mesh = await invoke<MeshGeometry>('slice_arbitrary_plane', {
+                                        grid: cleanGrid,
+                                        planePoint: arbitrarySlice.planePoint,
+                                        planeNormal: arbitrarySlice.planeNormal,
+                                    });
+                                }
+
                                 logger.debug(
                                     `Arbitrary plane '${arbitrarySlice.name}' intersected grid ${gridItem.id}`,
                                     'Viewer3D'

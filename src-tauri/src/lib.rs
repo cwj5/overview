@@ -925,6 +925,149 @@ fn compute_solution_colors_sliced(
     Ok(mesh)
 }
 
+/// Compute scalar field colors for an arbitrary plane slice with solution data  
+/// Uses vertex interpolation data to map arbitrary plane intersection points to solution values
+#[tauri::command]
+fn compute_solution_colors_arbitrary_plane(
+    grid: Plot3DGrid,
+    grid_index: usize,
+    field: String,
+    color_scheme: String,
+    plane_point: [f32; 3],
+    plane_normal: [f32; 3],
+    window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    use solution::{compute_colors, ColorScheme, ScalarField};
+
+    log_debug(&format!(
+        "compute_solution_colors_arbitrary_plane called: field={}, grid={}",
+        field, grid_index
+    ));
+    let _ = window.emit(
+        "loading-start",
+        format!("Computing {} field on arbitrary plane...", field),
+    );
+
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+
+    let scheme = ColorScheme::from_str(&color_scheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", color_scheme))?;
+
+    // Get the cached solution for this grid
+    let solution = {
+        let store = SOLUTION_CACHE
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = store
+            .iter()
+            .find(|sol| sol.grid_index == grid_index)
+            .ok_or_else(|| format!("No cached solution for grid index {}", grid_index))?;
+        Arc::clone(cached)
+    };
+
+    // Validate that solution dimensions match grid
+    let grid_points = grid.total_points();
+    if solution.rho.len() != grid_points {
+        return Err(format!(
+            "Solution points {} != grid points {}",
+            solution.rho.len(),
+            grid_points
+        ));
+    }
+
+    // Slice the grid with the arbitrary plane (enhanced version that tracks interpolation data)
+    let mut mesh = grid.slice_arbitrary_plane_with_solution(plane_point, plane_normal)?;
+
+    // Get vertex cell data
+    let vertex_cell_data = mesh
+        .vertex_cell_data
+        .as_ref()
+        .ok_or_else(|| "No vertex cell data available".to_string())?;
+
+    // Extract grid dimensions for linear indexing
+    let i_orig = grid.dimensions.i as usize;
+    let j_orig = grid.dimensions.j as usize;
+    let linear_index =
+        |i: usize, j: usize, k: usize| -> usize { i + j * i_orig + k * i_orig * j_orig };
+
+    // Interpolate solution values for each vertex
+    let mut values = Vec::with_capacity(vertex_cell_data.len());
+
+    for cell_data in vertex_cell_data {
+        // Get the 8 corner indices of the cell
+        let i = cell_data.cell_i;
+        let j = cell_data.cell_j;
+        let k = cell_data.cell_k;
+
+        let corner_indices = [
+            linear_index(i, j, k),             // 0
+            linear_index(i + 1, j, k),         // 1
+            linear_index(i + 1, j + 1, k),     // 2
+            linear_index(i, j + 1, k),         // 3
+            linear_index(i, j, k + 1),         // 4
+            linear_index(i + 1, j, k + 1),     // 5
+            linear_index(i + 1, j + 1, k + 1), // 6
+            linear_index(i, j + 1, k + 1),     // 7
+        ];
+
+        // Interpolate solution variables using the weights
+        let mut rho = 0.0;
+        let mut rhou = 0.0;
+        let mut rhov = 0.0;
+        let mut rhow = 0.0;
+        let mut rhoe = 0.0;
+        let mut gamma_val = 0.0;
+
+        for (idx, &corner_idx) in corner_indices.iter().enumerate() {
+            let weight = cell_data.weights[idx];
+            rho += weight * solution.rho[corner_idx];
+            rhou += weight * solution.rhou[corner_idx];
+            rhov += weight * solution.rhov[corner_idx];
+            rhow += weight * solution.rhow[corner_idx];
+            rhoe += weight * solution.rhoe[corner_idx];
+            if let Some(ref gamma_arr) = solution.gamma {
+                gamma_val += weight * gamma_arr[corner_idx];
+            }
+        }
+
+        // Create a temporary solution at this interpolated point
+        let point_solution = Plot3DSolution {
+            grid_index: 0,
+            dimensions: GridDimensions { i: 1, j: 1, k: 1 },
+            rho: vec![rho],
+            rhou: vec![rhou],
+            rhov: vec![rhov],
+            rhow: vec![rhow],
+            rhoe: vec![rhoe],
+            gamma: if solution.gamma.is_some() {
+                Some(vec![gamma_val])
+            } else {
+                None
+            },
+            metadata: None,
+        };
+
+        // Compute scalar field value
+        let value = compute_scalar_field_value(&point_solution, field_enum);
+        values.push(value);
+    }
+
+    // Convert values to colors
+    let colors = compute_colors(&values, &scheme);
+    log_debug(&format!(
+        "Computed {} colors for arbitrary plane slice",
+        colors.len() / 3
+    ));
+
+    // Add colors to mesh
+    mesh.colors = Some(colors);
+
+    let _ = window.emit("loading-end", ());
+
+    Ok(mesh)
+}
+
 #[tauri::command]
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let file_path = app.dialog().file().blocking_pick_file();
@@ -1080,6 +1223,7 @@ pub fn run() {
             compute_solution_colors_cached,
             compute_solution_colors_only_cached,
             compute_solution_colors_sliced,
+            compute_solution_colors_arbitrary_plane,
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,

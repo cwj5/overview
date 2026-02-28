@@ -105,6 +105,18 @@ pub struct MeshGeometry {
     pub face_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub colors: Option<Vec<f32>>, // Optional vertex colors (r, g, b interleaved)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertex_cell_data: Option<Vec<VertexCellData>>, // Cell interpolation data for solution mapping
+}
+
+/// Stores interpolation data for a vertex created by arbitrary plane slicing
+/// Used to map vertices back to their source cells for solution interpolation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VertexCellData {
+    pub cell_i: usize,
+    pub cell_j: usize,
+    pub cell_k: usize,
+    pub weights: [f32; 8], // Barycentric weights for the 8 corners of the hexahedral cell
 }
 
 /// Byte order detection
@@ -452,6 +464,315 @@ impl Plot3DGrid {
             vertex_count,
             face_count: segment_count, // Number of segments
             colors: None,
+            vertex_cell_data: None,
+        })
+    }
+
+    /// Enhanced version of slice_arbitrary_plane that creates a triangulated surface
+    /// and tracks cell interpolation data for solution coloring
+    pub fn slice_arbitrary_plane_with_solution(
+        &self,
+        plane_point: [f32; 3],
+        plane_normal: [f32; 3],
+    ) -> Result<MeshGeometry, String> {
+        let i = self.dimensions.i as usize;
+        let j = self.dimensions.j as usize;
+        let k = self.dimensions.k as usize;
+
+        // Normalize the plane normal
+        let normal_mag = (plane_normal[0] * plane_normal[0]
+            + plane_normal[1] * plane_normal[1]
+            + plane_normal[2] * plane_normal[2])
+            .sqrt();
+        if normal_mag < 1e-10 {
+            return Err("Plane normal vector has zero magnitude".to_string());
+        }
+        let n = [
+            plane_normal[0] / normal_mag,
+            plane_normal[1] / normal_mag,
+            plane_normal[2] / normal_mag,
+        ];
+        let d = n[0] * plane_point[0] + n[1] * plane_point[1] + n[2] * plane_point[2];
+        let signed_distance =
+            |x: f32, y: f32, z: f32| -> f32 { n[0] * x + n[1] * y + n[2] * z - d };
+
+        let get_point = |i_idx: usize, j_idx: usize, k_idx: usize| -> [f32; 3] {
+            let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+            [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
+        };
+
+        // Helper to compute trilinear interpolation weights for a point within a hex cell (unused for now)
+        let _compute_trilinear_weights = |point: [f32; 3], corners: &[[f32; 3]; 8]| -> [f32; 8] {
+            // Compute local coordinates (xi, eta, zeta) in [0,1]^3
+            // Using inverse trilinear interpolation (simplified approach)
+            // For a point inside a hex, find parametric coords by solving
+            // This is approximate - using simple averaging for now
+            let _center = [
+                (corners[0][0]
+                    + corners[1][0]
+                    + corners[2][0]
+                    + corners[3][0]
+                    + corners[4][0]
+                    + corners[5][0]
+                    + corners[6][0]
+                    + corners[7][0])
+                    / 8.0,
+                (corners[0][1]
+                    + corners[1][1]
+                    + corners[2][1]
+                    + corners[3][1]
+                    + corners[4][1]
+                    + corners[5][1]
+                    + corners[6][1]
+                    + corners[7][1])
+                    / 8.0,
+                (corners[0][2]
+                    + corners[1][2]
+                    + corners[2][2]
+                    + corners[3][2]
+                    + corners[4][2]
+                    + corners[5][2]
+                    + corners[6][2]
+                    + corners[7][2])
+                    / 8.0,
+            ];
+
+            // Estimate local coordinates using linear approximation
+            let dx = point[0] - corners[0][0];
+            let dy = point[1] - corners[0][1];
+            let dz = point[2] - corners[0][2];
+
+            let edge_i = [
+                corners[1][0] - corners[0][0],
+                corners[1][1] - corners[0][1],
+                corners[1][2] - corners[0][2],
+            ];
+            let edge_j = [
+                corners[3][0] - corners[0][0],
+                corners[3][1] - corners[0][1],
+                corners[3][2] - corners[0][2],
+            ];
+            let edge_k = [
+                corners[4][0] - corners[0][0],
+                corners[4][1] - corners[0][1],
+                corners[4][2] - corners[0][2],
+            ];
+
+            let len_i = (edge_i[0] * edge_i[0] + edge_i[1] * edge_i[1] + edge_i[2] * edge_i[2])
+                .sqrt()
+                .max(1e-10);
+            let len_j = (edge_j[0] * edge_j[0] + edge_j[1] * edge_j[1] + edge_j[2] * edge_j[2])
+                .sqrt()
+                .max(1e-10);
+            let len_k = (edge_k[0] * edge_k[0] + edge_k[1] * edge_k[1] + edge_k[2] * edge_k[2])
+                .sqrt()
+                .max(1e-10);
+
+            let xi = ((dx * edge_i[0] + dy * edge_i[1] + dz * edge_i[2]) / (len_i * len_i))
+                .clamp(0.0, 1.0);
+            let eta = ((dx * edge_j[0] + dy * edge_j[1] + dz * edge_j[2]) / (len_j * len_j))
+                .clamp(0.0, 1.0);
+            let zeta = ((dx * edge_k[0] + dy * edge_k[1] + dz * edge_k[2]) / (len_k * len_k))
+                .clamp(0.0, 1.0);
+
+            // Trilinear interpolation weights
+            [
+                (1.0 - xi) * (1.0 - eta) * (1.0 - zeta), // corner 0: (0,0,0)
+                xi * (1.0 - eta) * (1.0 - zeta),         // corner 1: (1,0,0)
+                xi * eta * (1.0 - zeta),                 // corner 2: (1,1,0)
+                (1.0 - xi) * eta * (1.0 - zeta),         // corner 3: (0,1,0)
+                (1.0 - xi) * (1.0 - eta) * zeta,         // corner 4: (0,0,1)
+                xi * (1.0 - eta) * zeta,                 // corner 5: (1,0,1)
+                xi * eta * zeta,                         // corner 6: (1,1,1)
+                (1.0 - xi) * eta * zeta,                 // corner 7: (0,1,1)
+            ]
+        };
+
+        let mut vertices = Vec::new();
+        let mut vertex_cell_data = Vec::new();
+        let mut triangle_indices = Vec::new();
+
+        let epsilon = 1e-8;
+
+        // Process each hexahedral cell
+        for k_idx in 0..k - 1 {
+            for j_idx in 0..j - 1 {
+                for i_idx in 0..i - 1 {
+                    // Get the 8 corners of the hexahedron
+                    let corners = [
+                        get_point(i_idx, j_idx, k_idx),             // 0
+                        get_point(i_idx + 1, j_idx, k_idx),         // 1
+                        get_point(i_idx + 1, j_idx + 1, k_idx),     // 2
+                        get_point(i_idx, j_idx + 1, k_idx),         // 3
+                        get_point(i_idx, j_idx, k_idx + 1),         // 4
+                        get_point(i_idx + 1, j_idx, k_idx + 1),     // 5
+                        get_point(i_idx + 1, j_idx + 1, k_idx + 1), // 6
+                        get_point(i_idx, j_idx + 1, k_idx + 1),     // 7
+                    ];
+
+                    // Check if plane intersects this cell
+                    let corner_dists: Vec<f32> = corners
+                        .iter()
+                        .map(|c| signed_distance(c[0], c[1], c[2]))
+                        .collect();
+
+                    let min_dist = corner_dists.iter().cloned().fold(f32::INFINITY, f32::min);
+                    let max_dist = corner_dists
+                        .iter()
+                        .cloned()
+                        .fold(f32::NEG_INFINITY, f32::max);
+
+                    // Skip if all corners on same side
+                    if min_dist > epsilon || max_dist < -epsilon {
+                        continue;
+                    }
+
+                    // Find intersection points on cell edges
+                    let edges = [
+                        (0, 1),
+                        (1, 2),
+                        (2, 3),
+                        (3, 0), // bottom face
+                        (4, 5),
+                        (5, 6),
+                        (6, 7),
+                        (7, 4), // top face
+                        (0, 4),
+                        (1, 5),
+                        (2, 6),
+                        (3, 7), // vertical edges
+                    ];
+
+                    let mut intersection_points: Vec<[f32; 3]> = Vec::new();
+                    let mut point_weights: Vec<[f32; 8]> = Vec::new();
+
+                    for &(c1, c2) in &edges {
+                        let d1 = corner_dists[c1];
+                        let d2 = corner_dists[c2];
+
+                        // Check if edge crosses plane
+                        if d1 * d2 < 0.0 || d1.abs() < epsilon || d2.abs() < epsilon {
+                            let point: [f32; 3];
+                            let weights: [f32; 8];
+
+                            if d1.abs() < epsilon {
+                                // Corner 1 is on the plane
+                                point = corners[c1];
+                                weights = {
+                                    let mut w = [0.0; 8];
+                                    w[c1] = 1.0;
+                                    w
+                                };
+                            } else if d2.abs() < epsilon {
+                                // Corner 2 is on the plane
+                                point = corners[c2];
+                                weights = {
+                                    let mut w = [0.0; 8];
+                                    w[c2] = 1.0;
+                                    w
+                                };
+                            } else if d1 * d2 < 0.0 {
+                                // Edge crosses plane - interpolate
+                                let t = d1.abs() / (d1.abs() + d2.abs());
+                                point = [
+                                    corners[c1][0] + t * (corners[c2][0] - corners[c1][0]),
+                                    corners[c1][1] + t * (corners[c2][1] - corners[c1][1]),
+                                    corners[c1][2] + t * (corners[c2][2] - corners[c1][2]),
+                                ];
+                                // Linear interpolation on edge
+                                weights = {
+                                    let mut w = [0.0; 8];
+                                    w[c1] = 1.0 - t;
+                                    w[c2] = t;
+                                    w
+                                };
+                            } else {
+                                continue;
+                            }
+
+                            // Check if we already have this point
+                            let mut found = false;
+                            for existing in &intersection_points {
+                                if (point[0] - existing[0]).abs() < epsilon
+                                    && (point[1] - existing[1]).abs() < epsilon
+                                    && (point[2] - existing[2]).abs() < epsilon
+                                {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                intersection_points.push(point);
+                                point_weights.push(weights);
+                            }
+                        }
+                    }
+
+                    // Create triangulated polygon from intersection points
+                    if intersection_points.len() >= 3 {
+                        let base_vertex_idx = vertices.len() / 3;
+
+                        // Add all intersection points
+                        for (point, weights) in intersection_points.iter().zip(point_weights.iter())
+                        {
+                            vertices.push(point[0]);
+                            vertices.push(point[1]);
+                            vertices.push(point[2]);
+                            vertex_cell_data.push(VertexCellData {
+                                cell_i: i_idx,
+                                cell_j: j_idx,
+                                cell_k: k_idx,
+                                weights: *weights,
+                            });
+                        }
+
+                        // Simple fan triangulation from first vertex
+                        for idx in 1..intersection_points.len() - 1 {
+                            triangle_indices.push(base_vertex_idx as u32);
+                            triangle_indices.push((base_vertex_idx + idx) as u32);
+                            triangle_indices.push((base_vertex_idx + idx + 1) as u32);
+                        }
+                    }
+                }
+            }
+        }
+
+        if vertices.is_empty() {
+            return Err("No intersection found between plane and grid".to_string());
+        }
+
+        // Compute normals (all vertices on the plane have the same normal)
+        let vertex_count = vertices.len() / 3;
+        let mut normals = Vec::with_capacity(vertex_count * 3);
+        for _ in 0..vertex_count {
+            normals.push(n[0]);
+            normals.push(n[1]);
+            normals.push(n[2]);
+        }
+
+        // Generate line indices from triangles for wireframe
+        let mut line_indices = Vec::new();
+        for tri_idx in (0..triangle_indices.len()).step_by(3) {
+            let v0 = triangle_indices[tri_idx];
+            let v1 = triangle_indices[tri_idx + 1];
+            let v2 = triangle_indices[tri_idx + 2];
+            line_indices.push(v0);
+            line_indices.push(v1);
+            line_indices.push(v1);
+            line_indices.push(v2);
+            line_indices.push(v2);
+            line_indices.push(v0);
+        }
+
+        Ok(MeshGeometry {
+            vertices,
+            indices: line_indices,
+            triangle_indices: triangle_indices.clone(),
+            normals,
+            vertex_count,
+            face_count: triangle_indices.len() / 3,
+            colors: None,
+            vertex_cell_data: Some(vertex_cell_data),
         })
     }
 
@@ -636,6 +957,7 @@ impl Plot3DGrid {
             vertex_count: total_points,
             face_count: triangle_count,
             colors: None,
+            vertex_cell_data: None,
         }
     }
 
@@ -758,6 +1080,7 @@ impl Plot3DGrid {
             vertex_count: i_decimated * j_decimated,
             face_count,
             colors: None,
+            vertex_cell_data: None,
         }
     }
 
