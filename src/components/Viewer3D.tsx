@@ -24,6 +24,7 @@ interface SerializableGrid {
     x_coords: number[];
     y_coords: number[];
     z_coords: number[];
+    iblank?: number[];
     original_indices?: number[]; // Maps sliced points back to original grid indices
 }
 
@@ -412,7 +413,7 @@ export default function Viewer3D({
 
         const currentColorKey = `${scalarField}|${colorScheme}`;
         // Only include APPLIED slices in the slice key to avoid reprocessing while editing
-        const sliceKey = `${sliceEnabled}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
+        const sliceKey = `${sliceEnabled}|${ignoreIblank}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
         const shouldRecolor = lastColorKeyRef.current !== currentColorKey;
         const shouldReslice = lastSliceKeyRef.current !== sliceKey;
 
@@ -574,6 +575,7 @@ export default function Viewer3D({
                 x_coords: Array.from(gridItem.grid.x_coords),
                 y_coords: Array.from(gridItem.grid.y_coords),
                 z_coords: Array.from(gridItem.grid.z_coords),
+                iblank: gridItem.grid.iblank ? Array.from(gridItem.grid.iblank) : undefined,
             };
             cleanGridCacheRef.current[gridItem.id] = cleanGrid;
             return cleanGrid;
@@ -621,6 +623,7 @@ export default function Viewer3D({
                                             colorScheme: colorScheme,
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
+                                            respect_iblank: !ignoreIblank,
                                         });
                                         const hasColors = mesh.colors && mesh.colors.length > 0;
                                         void invoke('frontend_log', {
@@ -644,6 +647,7 @@ export default function Viewer3D({
                                         grid: cleanGrid,
                                         planePoint: arbitrarySlice.planePoint,
                                         planeNormal: arbitrarySlice.planeNormal,
+                                        respect_iblank: !ignoreIblank,
                                     });
                                 }
 
@@ -709,6 +713,7 @@ export default function Viewer3D({
                                                 colorScheme: colorScheme,
                                                 slicePlane: slice.plane,
                                                 sliceIndex: slice.index,
+                                                respect_iblank: !ignoreIblank,
                                             });
                                             const hasColors = sliceMesh.colors && sliceMesh.colors.length > 0;
                                             void invoke('frontend_log', {
@@ -828,6 +833,7 @@ export default function Viewer3D({
                                     gridIndex: gridItem.gridIndex,
                                     field: scalarField,
                                     colorScheme: colorScheme,
+                                    respect_iblank: !ignoreIblank,
                                 });
                             } catch (invokeErr) {
                                 const invokeMsg = String(invokeErr);

@@ -212,10 +212,11 @@ const App = () => {
           },
         });
 
-        const ignoreIblankItem = await MenuItem.new({
+        const ignoreIblankItem = await CheckMenuItem.new({
           id: "ignore-iblank",
           text: "Ignore IBLANK",
           enabled: hasIblankData,
+          checked: ignoreIblank,
           action: () => {
             setIgnoreIblank((prev) => !prev);
           },
@@ -265,7 +266,7 @@ const App = () => {
     };
 
     setupMenu();
-  }, [hasIblankData, showWireframe, shadingMode]);
+  }, [hasIblankData, ignoreIblank, showWireframe, shadingMode]);
 
   // Reset ignoreIblank when IBLANK data is no longer available
   useEffect(() => {

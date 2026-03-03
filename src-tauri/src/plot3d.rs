@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
+use crate::logger;
+
 // Thread-local storage for last loaded solution file metadata
 thread_local! {
     static LAST_SOLUTION_METADATA: RefCell<Option<SolutionFileMetadata>> = RefCell::new(None);
@@ -286,6 +288,7 @@ impl Plot3DGrid {
         &self,
         plane_point: [f32; 3],
         plane_normal: [f32; 3],
+        respect_iblank: bool,
     ) -> Result<MeshGeometry, String> {
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
@@ -310,6 +313,27 @@ impl Plot3DGrid {
         let get_point = |i_idx: usize, j_idx: usize, k_idx: usize| -> [f32; 3] {
             let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
             [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
+        };
+        let cell_has_blanked_corner = |i_idx: usize, j_idx: usize, k_idx: usize| -> bool {
+            if !respect_iblank {
+                return false;
+            }
+            let Some(iblank) = self.iblank.as_ref() else {
+                return false;
+            };
+
+            let corners = [
+                Self::linear_index(i_idx, j_idx, k_idx, i, j),
+                Self::linear_index(i_idx + 1, j_idx, k_idx, i, j),
+                Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j),
+                Self::linear_index(i_idx, j_idx + 1, k_idx, i, j),
+                Self::linear_index(i_idx, j_idx, k_idx + 1, i, j),
+                Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j),
+                Self::linear_index(i_idx + 1, j_idx + 1, k_idx + 1, i, j),
+                Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j),
+            ];
+
+            corners.iter().any(|&idx| iblank[idx] == 0)
         };
 
         // Hexahedral cell faces are not necessarily planar, so split each face into triangles
@@ -345,6 +369,10 @@ impl Plot3DGrid {
         for k_idx in 0..k - 1 {
             for j_idx in 0..j - 1 {
                 for i_idx in 0..i - 1 {
+                    if cell_has_blanked_corner(i_idx, j_idx, k_idx) {
+                        continue;
+                    }
+
                     // Get the 8 corners of the hexahedron
                     let corners = [
                         get_point(i_idx, j_idx, k_idx),             // 0
@@ -474,6 +502,7 @@ impl Plot3DGrid {
         &self,
         plane_point: [f32; 3],
         plane_normal: [f32; 3],
+        respect_iblank: bool,
     ) -> Result<MeshGeometry, String> {
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
@@ -499,6 +528,27 @@ impl Plot3DGrid {
         let get_point = |i_idx: usize, j_idx: usize, k_idx: usize| -> [f32; 3] {
             let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
             [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
+        };
+        let cell_has_blanked_corner = |i_idx: usize, j_idx: usize, k_idx: usize| -> bool {
+            if !respect_iblank {
+                return false;
+            }
+            let Some(iblank) = self.iblank.as_ref() else {
+                return false;
+            };
+
+            let corners = [
+                Self::linear_index(i_idx, j_idx, k_idx, i, j),
+                Self::linear_index(i_idx + 1, j_idx, k_idx, i, j),
+                Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j),
+                Self::linear_index(i_idx, j_idx + 1, k_idx, i, j),
+                Self::linear_index(i_idx, j_idx, k_idx + 1, i, j),
+                Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j),
+                Self::linear_index(i_idx + 1, j_idx + 1, k_idx + 1, i, j),
+                Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j),
+            ];
+
+            corners.iter().any(|&idx| iblank[idx] == 0)
         };
 
         // Helper to compute trilinear interpolation weights for a point within a hex cell (unused for now)
@@ -598,6 +648,10 @@ impl Plot3DGrid {
         for k_idx in 0..k - 1 {
             for j_idx in 0..j - 1 {
                 for i_idx in 0..i - 1 {
+                    if cell_has_blanked_corner(i_idx, j_idx, k_idx) {
+                        continue;
+                    }
+
                     // Get the 8 corners of the hexahedron
                     let corners = [
                         get_point(i_idx, j_idx, k_idx),             // 0
@@ -1311,11 +1365,8 @@ pub fn read_plot3d_grid<P: AsRef<Path>>(path: P) -> io::Result<Vec<Plot3DGrid>> 
     for dims in dimensions_list {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        let (x_coords, y_coords, z_coords, _precision) =
+        let (x_coords, y_coords, z_coords, _precision, iblank) =
             read_xyz_coords_with_markers(&mut reader, total_points, byte_order)?;
-
-        // Try to read iblank array if present
-        let iblank = try_read_iblank_array(&mut reader, total_points, byte_order)?;
 
         grids.push(Plot3DGrid {
             dimensions: dims,
@@ -1415,7 +1466,7 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
     for dims in dimensions_list {
         let total_points = (dims.i as usize) * (dims.j as usize) * (dims.k as usize);
 
-        let (x_coords, y_coords, z_coords, grid_precision) =
+        let (x_coords, y_coords, z_coords, grid_precision, iblank) =
             read_xyz_coords_with_markers(&mut reader, total_points, byte_order)?;
 
         precision = Some(match precision {
@@ -1424,8 +1475,6 @@ pub fn read_plot3d_grid_with_metadata<P: AsRef<Path>>(
             Some(_) => Precision::Mixed,
         });
 
-        // Try to read iblank array if present
-        let iblank = try_read_iblank_array(&mut reader, total_points, byte_order)?;
         if iblank.is_some() {
             has_iblank = true;
         }
@@ -2151,7 +2200,7 @@ fn read_xyz_coords_with_markers<R: Read>(
     reader: &mut R,
     count: usize,
     byte_order: ByteOrder,
-) -> io::Result<(Vec<f32>, Vec<f32>, Vec<f32>, Precision)> {
+) -> io::Result<(Vec<f32>, Vec<f32>, Vec<f32>, Precision, Option<Vec<i32>>)> {
     let record_size = read_record_marker(reader, byte_order)?;
 
     if record_size <= 0 {
@@ -2181,7 +2230,12 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        Ok((x_coords, y_coords, z_coords, Precision::F32))
+        logger::log_entry(
+            "DEBUG",
+            &format!("Read XYZ as f32, no iblank (record_size={})", record_size),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, Precision::F32, None))
     }
     // XYZ only (f64)
     else if total_values_f64 == count * 3 {
@@ -2200,7 +2254,12 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        Ok((x_coords, y_coords, z_coords, Precision::F64))
+        logger::log_entry(
+            "DEBUG",
+            &format!("Read XYZ as f64, no iblank (record_size={})", record_size),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, Precision::F64, None))
     }
     // XYZ (f32) + IBLANK (i32): count * 3 * 4 + count * 4 = count * 16
     else if record_size as usize == count * 16 {
@@ -2208,9 +2267,17 @@ fn read_xyz_coords_with_markers<R: Read>(
         let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
         let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
 
-        // Skip IBLANK data (will be read separately if needed)
-        let mut iblank_data = vec![0u8; count * 4];
-        reader.read_exact(&mut iblank_data)?;
+        // Read IBLANK data as i32
+        let mut iblank = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            let value = match byte_order {
+                ByteOrder::LittleEndian => i32::from_le_bytes(buf),
+                ByteOrder::BigEndian => i32::from_be_bytes(buf),
+            };
+            iblank.push(value);
+        }
 
         let closing_marker = read_record_marker(reader, byte_order)?;
         if closing_marker != record_size {
@@ -2223,7 +2290,12 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        Ok((x_coords, y_coords, z_coords, Precision::F32))
+        logger::log_entry(
+            "INFO",
+            &format!("Read XYZ (f32) + IBLANK (i32) with {} points", count),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, Precision::F32, Some(iblank)))
     }
     // XYZ (f64) + IBLANK (i32): count * 3 * 8 + count * 4 = count * 28
     else if record_size as usize == count * 28 {
@@ -2231,9 +2303,17 @@ fn read_xyz_coords_with_markers<R: Read>(
         let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
         let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
 
-        // Skip IBLANK data (will be read separately if needed)
-        let mut iblank_data = vec![0u8; count * 4];
-        reader.read_exact(&mut iblank_data)?;
+        // Read IBLANK data as i32
+        let mut iblank = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf)?;
+            let value = match byte_order {
+                ByteOrder::LittleEndian => i32::from_le_bytes(buf),
+                ByteOrder::BigEndian => i32::from_be_bytes(buf),
+            };
+            iblank.push(value);
+        }
 
         let closing_marker = read_record_marker(reader, byte_order)?;
         if closing_marker != record_size {
@@ -2246,7 +2326,76 @@ fn read_xyz_coords_with_markers<R: Read>(
             ));
         }
 
-        Ok((x_coords, y_coords, z_coords, Precision::F64))
+        logger::log_entry(
+            "INFO",
+            &format!("Read XYZ (f64) + IBLANK (i32) with {} points", count),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, Precision::F64, Some(iblank)))
+    }
+    // XYZ (f32) + IBLANK (byte): count * 3 * 4 + count * 1 = count * 13
+    else if record_size as usize == count * 13 {
+        let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+        let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F32)?;
+
+        // Read IBLANK data as bytes
+        let mut iblank = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut buf = [0u8; 1];
+            reader.read_exact(&mut buf)?;
+            iblank.push(buf[0] as i32);
+        }
+
+        let closing_marker = read_record_marker(reader, byte_order)?;
+        if closing_marker != record_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Record marker mismatch: {} != {}",
+                    record_size, closing_marker
+                ),
+            ));
+        }
+
+        logger::log_entry(
+            "INFO",
+            &format!("Read XYZ (f32) + IBLANK (byte) with {} points", count),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, Precision::F32, Some(iblank)))
+    }
+    // XYZ (f64) + IBLANK (byte): count * 3 * 8 + count * 1 = count * 25
+    else if record_size as usize == count * 25 {
+        let x_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        let y_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+        let z_coords = read_values_with_precision(reader, count, byte_order, Precision::F64)?;
+
+        // Read IBLANK data as bytes
+        let mut iblank = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut buf = [0u8; 1];
+            reader.read_exact(&mut buf)?;
+            iblank.push(buf[0] as i32);
+        }
+
+        let closing_marker = read_record_marker(reader, byte_order)?;
+        if closing_marker != record_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Record marker mismatch: {} != {}",
+                    record_size, closing_marker
+                ),
+            ));
+        }
+
+        logger::log_entry(
+            "INFO",
+            &format!("Read XYZ (f64) + IBLANK (byte) with {} points", count),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, Precision::F64, Some(iblank)))
     }
     // Separate XYZ records - check if record_size matches expected size for one coordinate array
     else {
@@ -2257,11 +2406,13 @@ fn read_xyz_coords_with_markers<R: Read>(
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
-                        "Invalid record size: expected {} (f32), {} (f64), {} (f32+IBLANK), or {} (f64+IBLANK) bytes, got {} bytes",
+                        "Invalid record size: expected {} (f32), {} (f64), {} (f32+IBLANK i32), {} (f64+IBLANK i32), {} (f32+IBLANK byte), or {} (f64+IBLANK byte) bytes, got {} bytes",
                         count * 12,  // XYZ f32
                         count * 24,  // XYZ f64
                         count * 16,  // XYZ f32 + IBLANK i32
                         count * 28,  // XYZ f64 + IBLANK i32
+                        count * 13,  // XYZ f32 + IBLANK byte
+                        count * 25,  // XYZ f64 + IBLANK byte
                         record_size
                     ),
                 ));
@@ -2284,7 +2435,15 @@ fn read_xyz_coords_with_markers<R: Read>(
         let y_coords = read_f32_array_with_markers_precision(reader, count, byte_order, precision)?;
         let z_coords = read_f32_array_with_markers_precision(reader, count, byte_order, precision)?;
 
-        Ok((x_coords, y_coords, z_coords, precision))
+        logger::log_entry(
+            "DEBUG",
+            &format!(
+                "Read XYZ in separate records, no iblank (record_size={})",
+                record_size
+            ),
+            Some("plot3d".to_string()),
+        );
+        Ok((x_coords, y_coords, z_coords, precision, None))
     }
 }
 
@@ -2372,53 +2531,6 @@ fn read_f32_array_with_markers_precision<R: Read>(
     Ok(result)
 }
 
-/// Try to read iblank array if present (returns None if no more data or invalid marker)
-fn try_read_iblank_array<R: BufRead>(
-    reader: &mut R,
-    count: usize,
-    byte_order: ByteOrder,
-) -> io::Result<Option<Vec<i32>>> {
-    let buf = reader.fill_buf()?;
-    if buf.len() < 4 {
-        return Ok(None);
-    }
-
-    let record_size = match byte_order {
-        ByteOrder::LittleEndian => i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
-        ByteOrder::BigEndian => i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
-    };
-
-    if record_size != (count * 4) as i32 {
-        return Ok(None);
-    }
-
-    reader.consume(4);
-
-    let mut iblank = Vec::with_capacity(count);
-    for _ in 0..count {
-        let mut buf = [0u8; 4];
-        reader.read_exact(&mut buf)?;
-        let value = match byte_order {
-            ByteOrder::LittleEndian => i32::from_le_bytes(buf),
-            ByteOrder::BigEndian => i32::from_be_bytes(buf),
-        };
-        iblank.push(value);
-    }
-
-    let closing_marker = read_record_marker(reader, byte_order)?;
-    if closing_marker != record_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "iblank record marker mismatch: {} != {}",
-                record_size, closing_marker
-            ),
-        ));
-    }
-
-    Ok(Some(iblank))
-}
-
 /// Get the metadata from the last loaded solution file
 pub fn get_last_solution_metadata() -> Option<SolutionFileMetadata> {
     LAST_SOLUTION_METADATA.with(|m| m.borrow().clone())
@@ -2445,7 +2557,7 @@ mod tests {
         // Plane exactly at z=0 (bottom face)
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [0.0, 0.0, 1.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(result.is_ok(), "Should intersect aligned face");
         let mesh = result.unwrap();
         assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
@@ -2470,7 +2582,7 @@ mod tests {
         // Plane along x=0 edge
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [1.0, 0.0, 0.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(result.is_ok(), "Should intersect aligned edge");
         let mesh = result.unwrap();
         assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
@@ -2495,7 +2607,7 @@ mod tests {
         // Plane at z=0 (bottom face), should produce duplicate points at corners
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [0.0, 0.0, 1.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(result.is_ok(), "Should intersect aligned face");
         let mesh = result.unwrap();
         // Check that duplicate points are not present (all points are unique)
@@ -3620,7 +3732,7 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [0.0, 0.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(result.is_ok(), "Failed to slice grid: {:?}", result.err());
 
         let mesh = result.unwrap();
@@ -3669,7 +3781,7 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [1.0, 1.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(
             result.is_ok(),
             "Failed to slice diagonal plane: {:?}",
@@ -3718,7 +3830,7 @@ mod tests {
         let plane_point = [10.0, 10.0, 10.0];
         let plane_normal = [0.0, 0.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(
             result.is_err(),
             "Should fail when plane doesn't intersect grid"
@@ -3739,7 +3851,202 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [0.0, 0.0, 0.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
         assert!(result.is_err(), "Should fail with zero normal vector");
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_with_iblank_i32() -> io::Result<()> {
+        // Test reading a binary PLOT3D grid file with iblank array (i32 format)
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: Number of grids (1 grid)
+        temp_file.write_all(&4i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&1i32.to_le_bytes())?; // num_grids = 1
+        temp_file.write_all(&4i32.to_le_bytes())?; // Closing marker
+
+        // Record 2: Dimensions (2x2x1)
+        temp_file.write_all(&12i32.to_le_bytes())?; // Opening marker
+        temp_file.write_all(&2i32.to_le_bytes())?; // i = 2
+        temp_file.write_all(&2i32.to_le_bytes())?; // j = 2
+        temp_file.write_all(&1i32.to_le_bytes())?; // k = 1
+        temp_file.write_all(&12i32.to_le_bytes())?; // Closing marker
+
+        // Record 3: XYZ + IBLANK (4 points)
+        // XYZ: 4 points * 3 coords * 4 bytes = 48 bytes
+        // IBLANK: 4 points * 4 bytes = 16 bytes
+        // Total: 64 bytes
+        temp_file.write_all(&64i32.to_le_bytes())?; // Opening marker
+
+        // X coords
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+
+        // Y coords
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+
+        // Z coords
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+
+        // IBLANK array (blank the 3rd point, index 2)
+        temp_file.write_all(&1i32.to_le_bytes())?; // visible
+        temp_file.write_all(&1i32.to_le_bytes())?; // visible
+        temp_file.write_all(&0i32.to_le_bytes())?; // blanked
+        temp_file.write_all(&1i32.to_le_bytes())?; // visible
+
+        temp_file.write_all(&64i32.to_le_bytes())?; // Closing marker
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_grid_with_metadata(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read grid with iblank: {:?}",
+            result.err()
+        );
+
+        let (grids, metadata) = result.unwrap();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].total_points(), 4);
+        assert!(grids[0].iblank.is_some(), "iblank should be present");
+        assert_eq!(metadata.has_iblank, true);
+
+        let iblank = grids[0].iblank.as_ref().unwrap();
+        assert_eq!(iblank.len(), 4);
+        assert_eq!(iblank[0], 1);
+        assert_eq!(iblank[1], 1);
+        assert_eq!(iblank[2], 0); // This point is blanked
+        assert_eq!(iblank[3], 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_with_iblank_byte() -> io::Result<()> {
+        // Test reading a binary PLOT3D grid file with iblank array (byte format)
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: Number of grids (1 grid)
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: Dimensions (2x2x1)
+        temp_file.write_all(&12i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&12i32.to_le_bytes())?;
+
+        // Record 3: XYZ + IBLANK (byte format)
+        // XYZ: 4 points * 3 coords * 4 bytes = 48 bytes
+        // IBLANK: 4 points * 1 byte = 4 bytes
+        // Total: 52 bytes
+        temp_file.write_all(&52i32.to_le_bytes())?; // Opening marker
+
+        // X coords
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+
+        // Y coords
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+
+        // Z coords
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+
+        // IBLANK array as bytes (blank points 1 and 2)
+        temp_file.write_all(&[1u8])?; // visible
+        temp_file.write_all(&[0u8])?; // blanked
+        temp_file.write_all(&[0u8])?; // blanked
+        temp_file.write_all(&[1u8])?; // visible
+
+        temp_file.write_all(&52i32.to_le_bytes())?; // Closing marker
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_grid_with_metadata(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read grid with byte iblank: {:?}",
+            result.err()
+        );
+
+        let (grids, metadata) = result.unwrap();
+        assert_eq!(grids.len(), 1);
+        assert!(grids[0].iblank.is_some(), "iblank should be present");
+        assert_eq!(metadata.has_iblank, true);
+
+        let iblank = grids[0].iblank.as_ref().unwrap();
+        assert_eq!(iblank.len(), 4);
+        assert_eq!(iblank[0], 1);
+        assert_eq!(iblank[1], 0); // This point is blanked
+        assert_eq!(iblank[2], 0); // This point is blanked
+        assert_eq!(iblank[3], 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_plot3d_grid_without_iblank() -> io::Result<()> {
+        // Test that grids without iblank are still read correctly
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Record 1: Number of grids
+        temp_file.write_all(&4i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&4i32.to_le_bytes())?;
+
+        // Record 2: Dimensions (2x1x1)
+        temp_file.write_all(&12i32.to_le_bytes())?;
+        temp_file.write_all(&2i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&1i32.to_le_bytes())?;
+        temp_file.write_all(&12i32.to_le_bytes())?;
+
+        // Record 3: XYZ only (no iblank)
+        // 2 points * 3 coords * 4 bytes = 24 bytes
+        temp_file.write_all(&24i32.to_le_bytes())?;
+
+        temp_file.write_all(&0.0f32.to_le_bytes())?; // X
+        temp_file.write_all(&1.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?; // Y
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+        temp_file.write_all(&0.0f32.to_le_bytes())?; // Z
+        temp_file.write_all(&0.0f32.to_le_bytes())?;
+
+        temp_file.write_all(&24i32.to_le_bytes())?;
+
+        temp_file.flush()?;
+
+        let result = read_plot3d_grid_with_metadata(temp_file.path());
+        assert!(
+            result.is_ok(),
+            "Failed to read grid without iblank: {:?}",
+            result.err()
+        );
+
+        let (grids, metadata) = result.unwrap();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].total_points(), 2);
+        assert!(grids[0].iblank.is_none(), "iblank should be None");
+        assert_eq!(metadata.has_iblank, false);
+
+        Ok(())
     }
 }

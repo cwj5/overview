@@ -393,6 +393,7 @@ fn slice_arbitrary_plane(
     grid: Plot3DGrid,
     plane_point: [f32; 3],
     plane_normal: [f32; 3],
+    respect_iblank: Option<bool>,
     _window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     log_debug(&format!(
@@ -400,7 +401,8 @@ fn slice_arbitrary_plane(
         plane_point, plane_normal
     ));
 
-    let result = grid.slice_arbitrary_plane(plane_point, plane_normal);
+    let result =
+        grid.slice_arbitrary_plane(plane_point, plane_normal, respect_iblank.unwrap_or(false));
 
     match &result {
         Ok(mesh) => {
@@ -444,6 +446,7 @@ fn compute_solution_colors(
     solution: Plot3DSolution,
     field: String,
     color_scheme: String,
+    respect_iblank: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
@@ -505,7 +508,7 @@ fn compute_solution_colors(
     // Create surface mesh geometry (don't respect iblank for solution visualization)
     let mut mesh = args
         .grid
-        .to_mesh_surface_geometry_decimated(false, decimation_factor);
+        .to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
     mesh.colors = Some(colors);
 
     // Emit loading end event
@@ -521,6 +524,7 @@ fn compute_solution_colors_cached(
     grid_index: usize,
     field: String,
     color_scheme: String,
+    respect_iblank: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
@@ -586,7 +590,7 @@ fn compute_solution_colors_cached(
 
     let mut mesh = args
         .grid
-        .to_mesh_surface_geometry_decimated(false, decimation_factor);
+        .to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
     mesh.colors = Some(colors);
 
     let _ = window.emit("loading-end", ());
@@ -700,6 +704,7 @@ fn compute_solution_colors_sliced(
     color_scheme: String,
     slice_plane: String,
     slice_index: u32,
+    respect_iblank: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, ColorScheme, ScalarField};
@@ -917,7 +922,8 @@ fn compute_solution_colors_sliced(
 
     // Create mesh geometry from sliced grid
     // Use decimation_factor=1 for consistency with the sliced geometry size
-    let mut mesh = sliced_grid.to_mesh_surface_geometry_decimated(false, 1);
+    let mut mesh =
+        sliced_grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), 1);
     mesh.colors = Some(colors);
 
     let _ = window.emit("loading-end", ());
@@ -935,6 +941,7 @@ fn compute_solution_colors_arbitrary_plane(
     color_scheme: String,
     plane_point: [f32; 3],
     plane_normal: [f32; 3],
+    respect_iblank: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, ColorScheme, ScalarField};
@@ -977,7 +984,11 @@ fn compute_solution_colors_arbitrary_plane(
     }
 
     // Slice the grid with the arbitrary plane (enhanced version that tracks interpolation data)
-    let mut mesh = grid.slice_arbitrary_plane_with_solution(plane_point, plane_normal)?;
+    let mut mesh = grid.slice_arbitrary_plane_with_solution(
+        plane_point,
+        plane_normal,
+        respect_iblank.unwrap_or(false),
+    )?;
 
     // Get vertex cell data
     let vertex_cell_data = mesh
