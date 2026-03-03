@@ -1,6 +1,6 @@
 # PLOT3D Command Reference
 
-This document catalogs the command options and features from NASA's original PLOT3D visualization software (Walatka et al., 1990). This serves as a reference for feature implementation in Mehu.
+This document catalogs the command options and features from NASA's original PLOT3D visualization software (Walatka et al., 1990). This serves as a reference for feature implementation in overview.
 
 ## Reference
 NASA Technical Memorandum 101067: "PLOT3D User's Manual"  
@@ -368,7 +368,7 @@ END
 
 #### **Batch Processing Workflow**
 ```
-mehu --batch command_file.plot3d
+overview --batch command_file.plot3d
 ```
 - Execute commands sequentially without UI
 - Generate all output files
@@ -377,7 +377,7 @@ mehu --batch command_file.plot3d
 
 ---
 
-## Implementation Priority for Mehu
+## Implementation Priority for overview
 
 Based on the original PLOT3D capabilities, here's a suggested implementation priority:
 
@@ -412,15 +412,15 @@ Based on the original PLOT3D capabilities, here's a suggested implementation pri
 
 ## Notes on Modern Implementation
 
-While replicating PLOT3D's capabilities, Mehu can modernize the interface:
+While replicating PLOT3D's capabilities, overview can modernize the interface:
 
 - **Original PLOT3D**: Text-based command-line interface
-- **Mehu Approach**: GUI with panels, buttons, and interactive 3D controls
+- **overview Approach**: GUI with panels, buttons, and interactive 3D controls
 
 - **Original PLOT3D**: Sequential command execution
-- **Mehu Approach**: Real-time interactive manipulation
+- **overview Approach**: Real-time interactive manipulation
 
 - **Original PLOT3D**: Limited graphics hardware (1990s)
-- **Mehu Approach**: Modern GPU acceleration via WebGL/Three.js
+- **overview Approach**: Modern GPU acceleration via WebGL/Three.js
 
 The goal is to preserve PLOT3D's powerful analysis capabilities while providing a modern, intuitive user experience.

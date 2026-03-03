@@ -102,7 +102,7 @@ export const LogViewer: React.FC<LogViewerProps> = ({
             });
 
             // Format logs as text
-            let logText = "Mehu PLOT3D Viewer - Log Export\n";
+            let logText = "overview PLOT3D Viewer - Log Export\n";
             logText += "================================\n";
             logText += `Exported: ${new Date().toLocaleString()}\n`;
             logText += `Total entries: ${allLogs.length}\n`;

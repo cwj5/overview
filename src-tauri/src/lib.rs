@@ -1148,7 +1148,7 @@ async fn save_log_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, S
         .file()
         .add_filter("Text Files", &["txt"])
         .add_filter("All Files", &["*"])
-        .set_file_name("mehu-logs.txt")
+        .set_file_name("overview-logs.txt")
         .blocking_save_file();
 
     Ok(file_path.map(|f| f.to_string()))
@@ -1188,7 +1188,7 @@ async fn open_about_window(app: tauri::AppHandle) -> Result<(), String> {
         Ok(())
     } else {
         WebviewWindow::builder(&app, "about", tauri::WebviewUrl::App("/about.html".into()))
-            .title("About Mehu")
+            .title("About overview")
             .inner_size(600.0, 700.0)
             .resizable(true)
             .minimizable(true)

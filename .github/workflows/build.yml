@@ -41,7 +41,7 @@ jobs:
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: mehu-linux-appimage
+          name: overview-linux-appimage
           path: src-tauri/target/release/bundle/appimage/
 
   build-macos:
@@ -78,7 +78,7 @@ jobs:
       - name: Upload macOS app
         uses: actions/upload-artifact@v4
         with:
-          name: mehu-macos-${{ matrix.target }}
+          name: overview-macos-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/
 
   build-windows:
@@ -109,5 +109,4 @@ jobs:
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: mehu-windows-msi
-          path: src-tauri/target/release/bundle/msi/
+          name: overview-windows-msi

@@ -69,7 +69,7 @@ mod tests {
 
         // Verify file was created
         let content = fs::read_to_string(path)?;
-        assert!(content.contains("Mehu PLOT3D Viewer - Log Export"));
+        assert!(content.contains("overview PLOT3D Viewer - Log Export"));
         assert!(content.contains("================================"));
 
         Ok(())
@@ -245,7 +245,7 @@ mod tests {
 
         let content = fs::read_to_string(path)?;
         // Verify export has the expected structure
-        assert!(content.contains("Mehu PLOT3D Viewer"));
+        assert!(content.contains("overview PLOT3D Viewer"));
         assert!(content.contains("================================"));
 
         // Verify at least some log entries are present (might have other logs from other tests)

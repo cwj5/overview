@@ -1,15 +1,13 @@
-# Mehu - PLOT3D Viewer
+# overview - PLOT3D Viewer
 
-[![Build and Release](https://github.com/cwj5/mehu/actions/workflows/build.yml/badge.svg)](https://github.com/cwj5/mehu/actions/workflows/build.yml)
-[![Test and Coverage](https://github.com/cwj5/mehu/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/cwj5/mehu/actions/workflows/test-coverage.yml)
-[![TypeScript Tests](https://img.shields.io/badge/TypeScript_Tests-100%2F100-brightgreen)](https://github.com/cwj5/mehu)
-[![TypeScript Coverage](https://img.shields.io/badge/TypeScript_Coverage-97.62%25-brightgreen)](https://github.com/cwj5/mehu)
-[![Rust Tests](https://img.shields.io/badge/Rust_Tests-86%2F86-brightgreen)](https://github.com/cwj5/mehu)
-[![Rust Coverage](https://img.shields.io/badge/Rust_Coverage-45.28%25-yellow)](https://github.com/cwj5/mehu)
+[![Build and Release](https://github.com/cwj5/overview/actions/workflows/build.yml/badge.svg)](https://github.com/cwj5/overview/actions/workflows/build.yml)
+[![Test and Coverage](https://github.com/cwj5/overview/actions/workflows/test-coverage.yml/badge.svg)](https://github.com/cwj5/overview/actions/workflows/test-coverage.yml)
+[![TypeScript Tests](https://img.shields.io/badge/TypeScript_Tests-100%2F100-brightgreen)](https://github.com/cwj5/overview)
+[![TypeScript Coverage](https://img.shields.io/badge/TypeScript_Coverage-97.62%25-brightgreen)](https://github.com/cwj5/overview)
+[![Rust Tests](https://img.shields.io/badge/Rust_Tests-86%2F86-brightgreen)](https://github.com/cwj5/overview)
+[![Rust Coverage](https://img.shields.io/badge/Rust_Coverage-45.28%25-yellow)](https://github.com/cwj5/overview)
 
 A modern, cross-platform application for visualizing CFD (Computational Fluid Dynamics) grid and solution data in PLOT3D format.
-
-> **About the Name**: "Mehu" is a Twi phrase (a language spoken in Ghana) meaning "I see" — reflecting the core purpose of this visualization tool.
 
 ## Features
 

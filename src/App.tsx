@@ -204,7 +204,7 @@ const App = () => {
       try {
         const aboutItem = await MenuItem.new({
           id: "about",
-          text: "About Mehu",
+          text: "About overview",
           action: () => {
             invoke("open_about_window").catch((err) =>
               logger.error(`Failed to open About window: ${err}`)
@@ -476,7 +476,7 @@ const App = () => {
         flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <h1 style={{ margin: 0, fontSize: '20px' }}>Mehu - PLOT3D Viewer</h1>
+          <h1 style={{ margin: 0, fontSize: '20px' }}>overview - PLOT3D Viewer</h1>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button

@@ -15,7 +15,7 @@ export function AboutPage() {
     const openGitHub = async () => {
         console.log("Opening GitHub...");
         try {
-            await openUrl("https://github.com/cwj5/mehu");
+            await openUrl("https://github.com/cwj5/overview");
             console.log("GitHub opened successfully");
         } catch (err) {
             console.error("Failed to open GitHub:", err);
@@ -52,7 +52,7 @@ export function AboutPage() {
                     boxSizing: 'border-box',
                 }}
             >
-                <h1 style={{ margin: '0 0 8px 0', fontSize: '32px' }}>Mehu</h1>
+                <h1 style={{ margin: '0 0 8px 0', fontSize: '32px' }}>overview</h1>
                 <p style={{ margin: '0 0 4px 0', fontSize: '16px', color: '#94a3b8' }}>
                     PLOT3D Visualization Tool
                 </p>
@@ -93,8 +93,8 @@ export function AboutPage() {
                     }}
                 >
                     <p style={{ margin: '0' }}>
-                        <strong>"Mehu"</strong> means <strong>"I see"</strong><br></br>
-                        (in Twi, approximately)
+                        <strong>"overview"</strong> is a visualization tool<br></br>
+                        for exploring PLOT3D data
                     </p>
                 </div>
 

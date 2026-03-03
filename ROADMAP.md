@@ -1,4 +1,4 @@
-# Mehu PLOT3D Viewer - Development Roadmap
+# overview PLOT3D Viewer - Development Roadmap
 
 ## Overview
 This document outlines the future development work needed to create a full-featured PLOT3D visualization application that replicates the capabilities of NASA's original PLOT3D software.
@@ -356,7 +356,7 @@ Research and implement PLOT3D's 74 built-in functions:
 9. **Command Files & Batch Processing** (Phase 5.3)
    - Record interactive operations as command files
    - Load and replay command files
-   - Batch processing mode (CLI: `mehu --batch command_file.plot3d`)
+   - Batch processing mode (CLI: `overview --batch command_file.plot3d`)
    - Command file format with comments, loops, conditionals
    - Enable reproducible workflows and automation
 

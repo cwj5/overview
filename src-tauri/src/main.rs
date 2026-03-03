@@ -16,5 +16,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    mehu_lib::run()
+    overview_lib::run()
 }

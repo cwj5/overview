@@ -1,6 +1,6 @@
 # Testing & Coverage Guide
 
-This document outlines the testing infrastructure and coverage requirements for the Mehu project.
+This document outlines the testing infrastructure and coverage requirements for the overview project.
 
 ## Quick Start
 
