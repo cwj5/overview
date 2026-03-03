@@ -21,13 +21,18 @@ export interface ArbitrarySlice {
 
 export interface GridItem {
     id: string;
-    grid: Plot3DGrid;
+    grid?: Plot3DGrid; // Deprecated: Full grid data (for backward compatibility)
+    gridCacheId?: string; // New: Grid cache ID from backend
     filePath: string;
     fileName: string;
     gridIndex: number;
+    dimensions: { i: number; j: number; k: number }; // Always available
+    hasIblank: boolean; // Always available
     color: string;
     visible: boolean;
-    solution?: Plot3DSolution; // Optional solution data for this grid
+    solution?: Plot3DSolution; // Deprecated: Full solution data
+    solutionCacheId?: string; // New: Solution cache ID from backend
+    hasSolution: boolean; // Always available
 }
 
 export interface GridFileGroup {

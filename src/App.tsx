@@ -21,7 +21,7 @@ import { SolutionViewer } from "./components/SolutionViewer";
 import { LoadingIndicator } from "./components/LoadingIndicator";
 import { logger } from "./utils/logger";
 import { groupGridsByFile } from "./utils/gridUtils";
-import type { Plot3DGrid, Plot3DSolution } from "./types/plot3d";
+import type { GridMetadata, SolutionMetadata } from "./types/plot3d";
 import type { GridItem, GridSlice, ArbitrarySlice } from "./types/grids";
 import type { ScalarField } from "./utils/solutionData";
 import type { ColorScheme } from "./utils/colorMapping";
@@ -45,20 +45,42 @@ const GRID_COLORS = [
   "#ef4444",
 ];
 
-const buildGridItems = (
-  grids: Plot3DGrid[],
-  filePath: string,
-  fileName: string,
+// Deprecated: Old API (kept for compatibility)
+// const buildGridItems = (
+//   grids: Plot3DGrid[],
+//   filePath: string,
+//   fileName: string,
+//   colorOffset: number
+// ): GridItem[] =>
+//   grids.map((grid, index) => ({
+//     id: `${filePath}::${index}`,
+//     grid,
+//     filePath,
+//     fileName,
+//     gridIndex: index,
+//     dimensions: grid.dimensions,
+//     hasIblank: !!grid.iblank,
+//     color: GRID_COLORS[(index + colorOffset) % GRID_COLORS.length],
+//     visible: true,
+//     hasSolution: false,
+//   }));
+
+// Build grid items from metadata (v2 API - no full grid data)
+const buildGridItemsFromMetadata = (
+  metadataList: GridMetadata[],
   colorOffset: number
 ): GridItem[] =>
-  grids.map((grid, index) => ({
-    id: `${filePath}::${index}`,
-    grid,
-    filePath,
-    fileName,
-    gridIndex: index,
+  metadataList.map((meta, index) => ({
+    id: `${meta.file_path}::${meta.grid_index}`,
+    gridCacheId: meta.id,
+    filePath: meta.file_path,
+    fileName: meta.file_name,
+    gridIndex: meta.grid_index,
+    dimensions: meta.dimensions,
+    hasIblank: meta.has_iblank,
     color: GRID_COLORS[(index + colorOffset) % GRID_COLORS.length],
     visible: true,
+    hasSolution: meta.has_solution,
   }));
 
 const App = () => {
@@ -139,7 +161,7 @@ const App = () => {
     const newSlice: GridSlice = {
       id: `slice_${Date.now()}`,
       plane: 'K',
-      index: Math.floor(grid.grid.dimensions.k / 2)
+      index: Math.floor(grid.dimensions.k / 2)
     };
     setGridSlices(prev => ({
       ...prev,
@@ -196,7 +218,7 @@ const App = () => {
 
   // Check if any grid has IBLANK data
   const hasIblankData = useMemo(() => {
-    return grids.some((grid) => grid.grid.iblank !== null && grid.grid.iblank !== undefined);
+    return grids.some((grid) => grid.hasIblank);
   }, [grids]);
 
   useEffect(() => {
@@ -281,7 +303,7 @@ const App = () => {
     [grids, selectedGridIds]
   );
   const anyGridHasSolution = useMemo(
-    () => grids.some(grid => grid.solution),
+    () => grids.some(grid => grid.hasSolution),
     [grids]
   );
 
@@ -335,8 +357,12 @@ const App = () => {
       // Ensure UI updates
       await new Promise(resolve => requestAnimationFrame(resolve));
 
+      // Clear backend caches before loading new files
+      await invoke("clear_grid_cache");
+      await invoke("clear_solution_cache_v2");
+
       // Try to load each file as a grid, collect successful grids
-      const gridResults: { path: string; grids: Plot3DGrid[]; fileName: string }[] = [];
+      const gridResults: { path: string; metadata: GridMetadata[]; fileName: string }[] = [];
       const potentialSolutionPaths: string[] = [];
 
       for (const path of filePaths) {
@@ -345,9 +371,9 @@ const App = () => {
           setLoadingMessage(`Parsing ${fileName}...`);
           // Ensure message renders
           await new Promise(resolve => requestAnimationFrame(resolve));
-          const grids = await invoke<Plot3DGrid[]>("load_plot3d_file", { path });
-          gridResults.push({ path, grids, fileName });
-          logger.info(`Loaded ${grids.length} grid(s) from ${fileName}`);
+          const metadata = await invoke<GridMetadata[]>("load_plot3d_file_cached", { path });
+          gridResults.push({ path, metadata, fileName });
+          logger.info(`Loaded ${metadata.length} grid(s) from ${fileName}`);
         } catch (e) {
           // If it fails as a grid, it might be a solution file
           potentialSolutionPaths.push(path);
@@ -362,12 +388,12 @@ const App = () => {
       setLoadingMessage("Building grid structures...");
       await new Promise(resolve => requestAnimationFrame(resolve));
 
-      // Build grid items from all loaded grids
+      // Build grid items from all loaded grid metadata
       const allGrids: GridItem[] = [];
       let colorOffset = 0;
 
-      for (const { path, grids, fileName } of gridResults) {
-        const gridItems = buildGridItems(grids, path, fileName, colorOffset);
+      for (const { metadata } of gridResults) {
+        const gridItems = buildGridItemsFromMetadata(metadata, colorOffset);
         allGrids.push(...gridItems);
         colorOffset += gridItems.length;
       }
@@ -386,50 +412,49 @@ const App = () => {
         await new Promise(resolve => requestAnimationFrame(resolve));
         for (const solPath of potentialSolutionPaths) {
           try {
-            // Auto-detect binary or ASCII format and load accordingly
-            const solutions = await invoke<Plot3DSolution[]>("load_plot3d_solution_auto", { path: solPath });
+            // Use v2 API to load and cache solutions
+            const solutionMetadata = await invoke<SolutionMetadata[]>("load_plot3d_solution_cached", { path: solPath });
 
             // Validate solution matches grids
-            if (solutions.length !== allGrids.length) {
+            if (solutionMetadata.length !== allGrids.length) {
               throw new Error(
-                `Solution file has ${solutions.length} grid(s) but grid file has ${allGrids.length} grid(s). They must match.`
+                `Solution file has ${solutionMetadata.length} grid(s) but grid file has ${allGrids.length} grid(s). They must match.`
               );
             }
 
             // Validate dimensions for each grid
-            for (let i = 0; i < solutions.length; i++) {
-              const solution = solutions[i];
-              const gridItem = allGrids.find((g) => g.gridIndex === solution.grid_index);
+            for (let i = 0; i < solutionMetadata.length; i++) {
+              const solMeta = solutionMetadata[i];
+              const gridItem = allGrids.find((g) => g.gridIndex === solMeta.grid_index);
 
               if (!gridItem) {
-                throw new Error(`Solution grid ${solution.grid_index + 1} not found in loaded grids`);
+                throw new Error(`Solution grid ${solMeta.grid_index + 1} not found in loaded grids`);
               }
 
-              const grid = gridItem.grid;
               if (
-                solution.dimensions.i !== grid.dimensions.i ||
-                solution.dimensions.j !== grid.dimensions.j ||
-                solution.dimensions.k !== grid.dimensions.k
+                solMeta.dimensions.i !== gridItem.dimensions.i ||
+                solMeta.dimensions.j !== gridItem.dimensions.j ||
+                solMeta.dimensions.k !== gridItem.dimensions.k
               ) {
                 throw new Error(
-                  `Grid ${solution.grid_index + 1} dimensions mismatch: solution has ${solution.dimensions.i}x${solution.dimensions.j}x${solution.dimensions.k} but grid has ${grid.dimensions.i}x${grid.dimensions.j}x${grid.dimensions.k}`
+                  `Grid ${solMeta.grid_index + 1} dimensions mismatch: solution has ${solMeta.dimensions.i}x${solMeta.dimensions.j}x${solMeta.dimensions.k} but grid has ${gridItem.dimensions.i}x${gridItem.dimensions.j}x${gridItem.dimensions.k}`
                 );
               }
             }
 
-            // Match solutions to grids
+            // Match solution IDs to grids
             setGrids((prevGrids) =>
               prevGrids.map((gridItem) => {
-                const solution = solutions.find((sol) => sol.grid_index === gridItem.gridIndex);
-                if (solution) {
-                  return { ...gridItem, solution };
+                const solMeta = solutionMetadata.find((sol) => sol.grid_index === gridItem.gridIndex);
+                if (solMeta) {
+                  return { ...gridItem, solutionCacheId: solMeta.id, hasSolution: true };
                 }
                 return gridItem;
               })
             );
 
             setHasSolution(true);
-            logger.info(`Successfully loaded ${solutions.length} solution(s) from ${solPath.split(/[/\\]/).pop()}`);
+            logger.info(`Successfully loaded ${solutionMetadata.length} solution(s) from ${solPath.split(/[/\\]/).pop()}`);
           } catch (e) {
             const errorMsg = String(e).replace(/^Error:\s*/, '');
             logger.error(errorMsg);
@@ -862,7 +887,7 @@ const App = () => {
                         <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           {group.grids.map((grid) => {
                             const isSelected = selectedGridIds.includes(grid.id);
-                            const dims = grid.grid.dimensions;
+                            const dims = grid.dimensions;
                             return (
                               <div
                                 key={grid.id}
@@ -1100,9 +1125,9 @@ const App = () => {
                         <div style={{ color: '#cbd5f5' }}>File: {grid.fileName}</div>
                         <div style={{ color: '#cbd5f5' }}>Grid: {grid.gridIndex + 1}</div>
                         <div style={{ color: '#cbd5f5' }}>
-                          Dimensions: {grid.grid.dimensions.i}x{grid.grid.dimensions.j}x{grid.grid.dimensions.k}
+                          Dimensions: {grid.dimensions.i}x{grid.dimensions.j}x{grid.dimensions.k}
                         </div>
-                        {grid.solution && (
+                        {grid.hasSolution && (
                           <div style={{ color: '#10b981', marginTop: '4px', fontSize: '11px' }}>
                             ✓ Solution data loaded
                           </div>

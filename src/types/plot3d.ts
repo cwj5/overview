@@ -16,3 +16,22 @@ export interface Plot3DSolution {
     rhoe: number[]; // Energy
     gamma?: number[]; // Ratio of specific heats (always at Q[5], NQ=6+NQC+NQT)
 }
+
+// New: Metadata types for cached grids/solutions (no coordinate arrays)
+export interface GridMetadata {
+    id: string;
+    file_path: string;
+    file_name: string;
+    grid_index: number;
+    dimensions: { i: number; j: number; k: number };
+    has_iblank: boolean;
+    has_solution: boolean;
+}
+
+export interface SolutionMetadata {
+    id: string;
+    file_path: string;
+    file_name: string;
+    grid_index: number;
+    dimensions: { i: number; j: number; k: number };
+}

@@ -26,8 +26,9 @@ use plot3d::{
     read_plot3d_grid_with_metadata, read_plot3d_solution, read_plot3d_solution_ascii,
     GridDimensions, MeshGeometry, Plot3DFunction, Plot3DGrid, Plot3DSolution, SolutionFileMetadata,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::webview::WebviewWindow;
@@ -40,6 +41,7 @@ thread_local! {
     static SOLUTION_METADATA: RefCell<Option<SolutionFileMetadata>> = RefCell::new(None);
 }
 
+// Deprecated: Legacy solution cache - keeping for backward compatibility during migration
 static SOLUTION_CACHE: Lazy<Mutex<Vec<Arc<Plot3DSolution>>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 fn cache_solutions(solutions: &[Plot3DSolution]) {
@@ -50,6 +52,104 @@ fn cache_solutions(solutions: &[Plot3DSolution]) {
     if let Ok(mut store) = SOLUTION_CACHE.lock() {
         *store = cached;
     }
+}
+
+// ============================================================================
+// NEW: Grid and Solution Cache Architecture
+// ============================================================================
+
+/// Cached grid entry with metadata
+#[derive(Clone, Debug, Serialize)]
+struct CachedGrid {
+    id: String,
+    grid: Arc<Plot3DGrid>,
+    file_path: String,
+    file_name: String,
+    grid_index: usize,
+    has_iblank: bool,
+}
+
+/// Cached solution entry with metadata
+#[derive(Clone, Debug, Serialize)]
+struct CachedSolution {
+    id: String,
+    solution: Arc<Plot3DSolution>,
+    file_path: String,
+    file_name: String,
+    grid_index: usize,
+}
+
+/// Metadata about a cached grid (no coordinate arrays)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GridMetadata {
+    pub id: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub grid_index: usize,
+    pub dimensions: GridDimensions,
+    pub has_iblank: bool,
+    pub has_solution: bool,
+}
+
+/// Metadata about a cached solution (no arrays)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SolutionMetadata {
+    pub id: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub grid_index: usize,
+    pub dimensions: GridDimensions,
+}
+
+/// Global grid cache: grid_id -> CachedGrid
+static GRID_CACHE: Lazy<Mutex<HashMap<String, CachedGrid>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Global solution cache: solution_id -> CachedSolution
+static SOLUTION_CACHE_V2: Lazy<Mutex<HashMap<String, CachedSolution>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Counter for generating unique grid IDs
+static GRID_ID_COUNTER: Lazy<Mutex<u64>> = Lazy::new(|| Mutex::new(0));
+
+/// Generate a unique grid ID
+fn generate_grid_id(file_path: &str, grid_index: usize) -> String {
+    let mut counter = GRID_ID_COUNTER.lock().unwrap();
+    *counter += 1;
+    format!(
+        "grid_{}_{}_idx{}_{}",
+        *counter,
+        Path::new(file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown"),
+        grid_index,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    )
+}
+
+/// Generate a unique solution ID
+fn generate_solution_id(file_path: &str, grid_index: usize) -> String {
+    let mut counter = GRID_ID_COUNTER.lock().unwrap();
+    *counter += 1;
+    format!(
+        "solution_{}_{}_idx{}_{}",
+        *counter,
+        Path::new(file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown"),
+        grid_index,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    )
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -297,6 +397,175 @@ fn load_plot3d_function(path: String) -> Result<Vec<Plot3DFunction>, String> {
     }
 }
 
+// ============================================================================
+// NEW: V2 Load Commands that Cache and Return Metadata
+// ============================================================================
+
+/// Load PLOT3D grid file (caches grids and returns metadata)
+#[tauri::command]
+fn load_plot3d_file_cached(path: String) -> Result<Vec<GridMetadata>, String> {
+    // Load grids using existing reader
+    let (grids, file_metadata) = read_plot3d_grid_with_metadata(&path).map_err(|e| {
+        let error_msg = format!("Error loading PLOT3D file: {}", e);
+        log_error(&error_msg);
+        error_msg
+    })?;
+
+    let file_name = Path::new(&path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let dims_str = file_metadata
+        .grid_dimensions
+        .iter()
+        .enumerate()
+        .map(|(idx, d)| format!("Grid {} ({}×{}×{})", idx + 1, d.i, d.j, d.k))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    log_info(&format!(
+        "Loaded grid file {} (endianness: {}, precision: {}, iblank: {})",
+        path,
+        file_metadata.byte_order,
+        file_metadata.precision,
+        if file_metadata.has_iblank {
+            "yes"
+        } else {
+            "no"
+        }
+    ));
+    log_info(&format!("Grids: {}", dims_str));
+
+    // Cache grids and generate metadata
+    let mut cache = GRID_CACHE
+        .lock()
+        .map_err(|_| "Grid cache lock poisoned".to_string())?;
+
+    let mut metadata_list = Vec::new();
+
+    for (grid_index, grid) in grids.into_iter().enumerate() {
+        let grid_id = generate_grid_id(&path, grid_index);
+        let has_iblank = grid.iblank.is_some();
+
+        let cached_grid = CachedGrid {
+            id: grid_id.clone(),
+            grid: Arc::new(grid.clone()),
+            file_path: path.clone(),
+            file_name: file_name.clone(),
+            grid_index,
+            has_iblank,
+        };
+
+        cache.insert(grid_id.clone(), cached_grid);
+
+        metadata_list.push(GridMetadata {
+            id: grid_id,
+            file_path: path.clone(),
+            file_name: file_name.clone(),
+            grid_index,
+            dimensions: grid.dimensions,
+            has_iblank,
+            has_solution: false, // Will be updated when solution is loaded
+        });
+    }
+
+    log_info(&format!("Cached {} grids", metadata_list.len()));
+
+    Ok(metadata_list)
+}
+
+/// Load PLOT3D solution file (caches solutions and returns metadata)
+#[tauri::command]
+fn load_plot3d_solution_cached(path: String) -> Result<Vec<SolutionMetadata>, String> {
+    log_debug(&format!("Loading PLOT3D solution file (v2): {}", path));
+
+    // Load solutions using existing reader (auto-detects format)
+    let (solutions, _) = {
+        // Try binary first
+        match read_plot3d_solution(&path) {
+            Ok(solutions) => {
+                let metadata = get_last_solution_metadata();
+                (solutions, metadata)
+            }
+            Err(binary_err) => {
+                // Try ASCII
+                match read_plot3d_solution_ascii(&path) {
+                    Ok(solutions) => {
+                        let metadata = get_last_solution_metadata();
+                        (solutions, metadata)
+                    }
+                    Err(ascii_err) => {
+                        let error_msg = format!(
+                            "Failed to load solution file. Binary: {}. ASCII: {}",
+                            binary_err, ascii_err
+                        );
+                        log_error(&error_msg);
+                        return Err(error_msg);
+                    }
+                }
+            }
+        }
+    };
+
+    let file_name = Path::new(&path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    if let Some(metadata) = get_last_solution_metadata() {
+        log_info(&format!(
+            "Loaded solution file {} ({} format, {} precision, endianness: {})",
+            path, metadata.format, metadata.precision, metadata.byte_order
+        ));
+    } else {
+        log_info(&format!(
+            "Successfully loaded {} solution(s) from {}",
+            solutions.len(),
+            path
+        ));
+    }
+
+    // Cache solutions for old API compatibility
+    cache_solutions(&solutions);
+
+    // Cache solutions in v2 cache and generate metadata
+    let mut cache = SOLUTION_CACHE_V2
+        .lock()
+        .map_err(|_| "Solution cache lock poisoned".to_string())?;
+
+    let mut metadata_list = Vec::new();
+
+    for solution in solutions.into_iter() {
+        let grid_index = solution.grid_index;
+        let solution_id = generate_solution_id(&path, grid_index);
+
+        let cached_solution = CachedSolution {
+            id: solution_id.clone(),
+            solution: Arc::new(solution.clone()),
+            file_path: path.clone(),
+            file_name: file_name.clone(),
+            grid_index,
+        };
+
+        cache.insert(solution_id.clone(), cached_solution);
+
+        metadata_list.push(SolutionMetadata {
+            id: solution_id,
+            file_path: path.clone(),
+            file_name: file_name.clone(),
+            grid_index,
+            dimensions: solution.dimensions,
+        });
+    }
+
+    log_info(&format!("Cached {} solutions", metadata_list.len()));
+
+    Ok(metadata_list)
+}
+
 /// Convert PLOT3D grid to Three.js mesh geometry
 #[tauri::command]
 fn convert_grid_to_mesh(
@@ -371,277 +640,6 @@ fn convert_grid_to_mesh(
     Ok(mesh)
 }
 
-/// Slice a PLOT3D grid along a constant I, J, or K plane
-#[tauri::command]
-fn slice_grid(grid: Plot3DGrid, plane: String, index: u32) -> Result<Plot3DGrid, String> {
-    log_debug(&format!(
-        "Slicing grid along {} plane at index {}",
-        plane, index
-    ));
-    grid.slice_grid(&plane, index).map_err(|e| {
-        let error_msg = format!("Failed to slice grid: {}", e);
-        log_error(&error_msg);
-        error_msg
-    })
-}
-
-/// Slice a PLOT3D grid with an arbitrary cutting plane
-/// plane_point: [x, y, z] coordinates of a point on the plane
-/// plane_normal: [nx, ny, nz] normal vector to the plane
-#[tauri::command]
-fn slice_arbitrary_plane(
-    grid: Plot3DGrid,
-    plane_point: [f32; 3],
-    plane_normal: [f32; 3],
-    respect_iblank: Option<bool>,
-    _window: WebviewWindow,
-) -> Result<MeshGeometry, String> {
-    log_debug(&format!(
-        "Slicing grid with arbitrary plane: point={:?}, normal={:?}",
-        plane_point, plane_normal
-    ));
-
-    let result =
-        grid.slice_arbitrary_plane(plane_point, plane_normal, respect_iblank.unwrap_or(false));
-
-    match &result {
-        Ok(mesh) => {
-            log_info(&format!(
-                "Arbitrary plane slice generated: {} vertices, {} triangles",
-                mesh.vertex_count,
-                mesh.triangle_indices.len() / 3
-            ));
-        }
-        Err(e) => {
-            log_error(&format!("Failed to slice arbitrary plane: {}", e));
-        }
-    }
-
-    result
-}
-
-#[derive(Deserialize)]
-struct ComputeSolutionColorsArgs {
-    grid: Plot3DGrid,
-    solution: Plot3DSolution,
-    field: String,
-    #[serde(alias = "colorScheme", alias = "color_scheme")]
-    color_scheme: String,
-}
-
-#[derive(Deserialize)]
-struct ComputeSolutionColorsCachedArgs {
-    grid: Plot3DGrid,
-    #[serde(alias = "gridIndex", alias = "grid_index")]
-    grid_index: usize,
-    field: String,
-    #[serde(alias = "colorScheme", alias = "color_scheme")]
-    color_scheme: String,
-}
-
-/// Compute scalar field colors for a grid with solution data
-#[tauri::command]
-fn compute_solution_colors(
-    grid: Plot3DGrid,
-    solution: Plot3DSolution,
-    field: String,
-    color_scheme: String,
-    respect_iblank: Option<bool>,
-    window: WebviewWindow,
-) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
-
-    // Emit loading start event
-    let _ = window.emit("loading-start", format!("Computing {} field...", field));
-
-    let args = ComputeSolutionColorsArgs {
-        grid,
-        solution,
-        field,
-        color_scheme,
-    };
-
-    // Parse field type
-    let field_enum = ScalarField::from_str(&args.field)
-        .ok_or_else(|| format!("Unknown scalar field: {}", args.field))?;
-
-    // Parse color scheme
-    let scheme = ColorScheme::from_str(&args.color_scheme)
-        .ok_or_else(|| format!("Unknown color scheme: {}", args.color_scheme))?;
-
-    // Validate solution matches grid
-    let grid_points = args.grid.total_points();
-    if args.solution.rho.len() != grid_points {
-        return Err(format!(
-            "Solution points {} != grid points {}",
-            args.solution.rho.len(),
-            grid_points
-        ));
-    }
-
-    // Auto-detect decimation based on grid size for better performance
-    let i = args.grid.dimensions.i as usize;
-    let j = args.grid.dimensions.j as usize;
-    let max_dim = i.max(j);
-
-    let decimation_factor = if max_dim > 1000 {
-        4 // Very large grids: use 1/4 resolution
-    } else if max_dim > 500 {
-        3 // Large grids: use 1/3 resolution
-    } else if max_dim > 250 {
-        2 // Medium grids: use 1/2 resolution
-    } else {
-        1 // Small grids: full resolution
-    };
-
-    if decimation_factor > 1 {
-        log_info(&format!(
-            "Solution grid size {}x{} - applying {}x decimation for performance",
-            i, j, decimation_factor
-        ));
-    }
-
-    // Compute scalar values/colors for surface only
-    let values = compute_scalar_field_surface(&args.solution, field_enum, decimation_factor);
-    let colors = compute_colors(&values, &scheme);
-
-    // Create surface mesh geometry (don't respect iblank for solution visualization)
-    let mut mesh = args
-        .grid
-        .to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
-    mesh.colors = Some(colors);
-
-    // Emit loading end event
-    let _ = window.emit("loading-end", ());
-
-    Ok(mesh)
-}
-
-/// Compute scalar field colors using cached solution data
-#[tauri::command]
-fn compute_solution_colors_cached(
-    grid: Plot3DGrid,
-    grid_index: usize,
-    field: String,
-    color_scheme: String,
-    respect_iblank: Option<bool>,
-    window: WebviewWindow,
-) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
-
-    let _ = window.emit("loading-start", format!("Computing {} field...", field));
-
-    let args = ComputeSolutionColorsCachedArgs {
-        grid,
-        grid_index,
-        field,
-        color_scheme,
-    };
-
-    let field_enum = ScalarField::from_str(&args.field)
-        .ok_or_else(|| format!("Unknown scalar field: {}", args.field))?;
-
-    let scheme = ColorScheme::from_str(&args.color_scheme)
-        .ok_or_else(|| format!("Unknown color scheme: {}", args.color_scheme))?;
-
-    let solution = {
-        let store = SOLUTION_CACHE
-            .lock()
-            .map_err(|_| "Solution cache lock poisoned".to_string())?;
-        let cached = store
-            .iter()
-            .find(|sol| sol.grid_index == args.grid_index)
-            .ok_or_else(|| format!("No cached solution for grid index {}", args.grid_index))?;
-        Arc::clone(cached)
-    };
-
-    let grid_points = args.grid.total_points();
-    if solution.rho.len() != grid_points {
-        return Err(format!(
-            "Solution points {} != grid points {}",
-            solution.rho.len(),
-            grid_points
-        ));
-    }
-
-    let i = args.grid.dimensions.i as usize;
-    let j = args.grid.dimensions.j as usize;
-    let max_dim = i.max(j);
-
-    let decimation_factor = if max_dim > 1000 {
-        4
-    } else if max_dim > 500 {
-        3
-    } else if max_dim > 250 {
-        2
-    } else {
-        1
-    };
-
-    if decimation_factor > 1 {
-        log_info(&format!(
-            "Solution grid size {}x{} - applying {}x decimation for performance",
-            i, j, decimation_factor
-        ));
-    }
-
-    let values = compute_scalar_field_surface(&solution, field_enum, decimation_factor);
-    let colors = compute_colors(&values, &scheme);
-
-    let mut mesh = args
-        .grid
-        .to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
-    mesh.colors = Some(colors);
-
-    let _ = window.emit("loading-end", ());
-
-    Ok(mesh)
-}
-
-/// Compute scalar field colors only using cached solution data
-#[tauri::command]
-fn compute_solution_colors_only_cached(
-    grid_index: usize,
-    field: String,
-    color_scheme: String,
-) -> Result<Vec<f32>, String> {
-    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
-
-    let field_enum =
-        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
-
-    let scheme = ColorScheme::from_str(&color_scheme)
-        .ok_or_else(|| format!("Unknown color scheme: {}", color_scheme))?;
-
-    let solution = {
-        let store = SOLUTION_CACHE
-            .lock()
-            .map_err(|_| "Solution cache lock poisoned".to_string())?;
-        let cached = store
-            .iter()
-            .find(|sol| sol.grid_index == grid_index)
-            .ok_or_else(|| format!("No cached solution for grid index {}", grid_index))?;
-        Arc::clone(cached)
-    };
-
-    let i = solution.dimensions.i as usize;
-    let j = solution.dimensions.j as usize;
-    let max_dim = i.max(j);
-
-    let decimation_factor = if max_dim > 1000 {
-        4
-    } else if max_dim > 500 {
-        3
-    } else if max_dim > 250 {
-        2
-    } else {
-        1
-    };
-
-    let values = compute_scalar_field_surface(&solution, field_enum, decimation_factor);
-    Ok(compute_colors(&values, &scheme))
-}
-
 /// Helper function to compute a scalar field value from a single point's solution data
 fn compute_scalar_field_value(solution: &Plot3DSolution, field: solution::ScalarField) -> f32 {
     use solution::ScalarField;
@@ -693,287 +691,187 @@ fn compute_scalar_field_value(solution: &Plot3DSolution, field: solution::Scalar
     }
 }
 
-/// Compute scalar field colors for a sliced grid using original grid's solution data
-/// Maps sliced grid points back to their original indices for solution lookup
+// ============================================================================
+// NEW: ID-Based Compute Commands (Phase 2)
+// ============================================================================
+
+/// Convert cached grid to mesh geometry (ID-based)
+#[allow(non_snake_case)]
 #[tauri::command]
-fn compute_solution_colors_sliced(
-    sliced_grid: Plot3DGrid,
-    original_grid: Plot3DGrid,
-    grid_index: usize,
-    field: String,
-    color_scheme: String,
-    slice_plane: String,
-    slice_index: u32,
+fn convert_grid_to_mesh_by_id(
+    gridId: String,
     respect_iblank: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, ColorScheme, ScalarField};
+    let _ = window.emit("loading-start", "Converting grid to mesh...");
 
-    log_debug(&format!(
-        "compute_solution_colors_sliced called: plane={}, index={}, field={}, grid={}",
-        slice_plane, slice_index, field, grid_index
-    ));
-    let _ = window.emit(
-        "loading-start",
-        format!("Computing {} field on slice...", field),
-    );
-
-    let field_enum =
-        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
-
-    let scheme = ColorScheme::from_str(&color_scheme)
-        .ok_or_else(|| format!("Unknown color scheme: {}", color_scheme))?;
-
-    // Get the cached solution for this grid
-    let solution = {
-        let store = SOLUTION_CACHE
+    // Load grid from cache
+    let grid = {
+        let cache = GRID_CACHE
             .lock()
-            .map_err(|_| "Solution cache lock poisoned".to_string())?;
-        let cached = store
-            .iter()
-            .find(|sol| sol.grid_index == grid_index)
-            .ok_or_else(|| format!("No cached solution for grid index {}", grid_index))?;
-        Arc::clone(cached)
+            .map_err(|_| "Grid cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&gridId)
+            .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
+        Arc::clone(&cached.grid)
     };
 
-    // Validate that solution dimensions match original grid
-    let grid_points = original_grid.total_points();
-    if solution.rho.len() != grid_points {
+    // Validate grid data
+    let total_points = grid.total_points();
+    if grid.x_coords.len() != total_points {
         return Err(format!(
-            "Solution points {} != original grid points {}",
-            solution.rho.len(),
-            grid_points
+            "Invalid grid: x_coords length {} != expected {}",
+            grid.x_coords.len(),
+            total_points
         ));
     }
 
-    // Extract the original grid dimensions
-    let i_orig = original_grid.dimensions.i as usize;
-    let j_orig = original_grid.dimensions.j as usize;
-    let k_orig = original_grid.dimensions.k as usize;
+    // Auto-detect decimation
+    let i = grid.dimensions.i as usize;
+    let j = grid.dimensions.j as usize;
+    let max_dim = i.max(j);
 
-    // Extract the sliced grid dimensions
-    let i_slice = sliced_grid.dimensions.i as usize;
-    let j_slice = sliced_grid.dimensions.j as usize;
-    let _k_slice = sliced_grid.dimensions.k as usize;
+    let decimation_factor = if max_dim > 1000 {
+        4
+    } else if max_dim > 500 {
+        3
+    } else if max_dim > 250 {
+        2
+    } else {
+        1
+    };
 
-    let slice_idx = slice_index as usize;
-
-    // Map each point in the sliced grid back to its original indices to get solution values
-    let mut values = Vec::with_capacity(sliced_grid.total_points());
-
-    let linear_index_original =
-        |i: usize, j: usize, k: usize| -> usize { i + j * i_orig + k * i_orig * j_orig };
-
-    match slice_plane.to_uppercase().as_str() {
-        "K" => {
-            // Constant K plane: sliced grid has dimensions (i_orig x j_orig x 1)
-            // Each point (i,j) in sliced grid maps to (i,j,slice_idx) in original
-            for j_idx in 0..j_slice {
-                for i_idx in 0..i_slice {
-                    let orig_i = i_idx;
-                    let orig_j = j_idx;
-                    let orig_k = slice_idx;
-
-                    if orig_i >= i_orig || orig_j >= j_orig || orig_k >= k_orig {
-                        return Err(format!(
-                            "K-slice mapping out of bounds: ({},{},{}) not in ({},{},{})",
-                            orig_i, orig_j, orig_k, i_orig, j_orig, k_orig
-                        ));
-                    }
-
-                    let orig_linear = linear_index_original(orig_i, orig_j, orig_k);
-
-                    // Extract solution values at this point
-                    let rho = solution.rho[orig_linear];
-                    let rhou = solution.rhou[orig_linear];
-                    let rhov = solution.rhov[orig_linear];
-                    let rhow = solution.rhow[orig_linear];
-                    let rhoe = solution.rhoe[orig_linear];
-
-                    // Get gamma if available
-                    let gamma = solution.gamma.as_ref().map(|g| g[orig_linear]);
-
-                    // Create a temporary solution at this point to compute scalar field
-                    let point_solution = Plot3DSolution {
-                        grid_index: 0,
-                        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
-                        rho: vec![rho],
-                        rhou: vec![rhou],
-                        rhov: vec![rhov],
-                        rhow: vec![rhow],
-                        rhoe: vec![rhoe],
-                        gamma: gamma.map(|g| vec![g]),
-                        metadata: None,
-                    };
-
-                    // Compute scalar field value
-                    let value = compute_scalar_field_value(&point_solution, field_enum);
-                    values.push(value);
-                }
-            }
-        }
-        "J" => {
-            // Constant J plane: sliced grid has dimensions (i_orig x k_orig x 1)
-            // The sliced dimensions are remapped: i_slice=i_orig, j_slice=k_orig
-            // Each point (i,k) in sliced grid maps to (i,slice_idx,k) in original
-            for k_idx in 0..j_slice {
-                // j_slice becomes k for the loop
-                for i_idx in 0..i_slice {
-                    let orig_i = i_idx;
-                    let orig_j = slice_idx;
-                    let orig_k = k_idx;
-
-                    if orig_i >= i_orig || orig_j >= j_orig || orig_k >= k_orig {
-                        return Err(format!(
-                            "J-slice mapping out of bounds: ({},{},{}) not in ({},{},{})",
-                            orig_i, orig_j, orig_k, i_orig, j_orig, k_orig
-                        ));
-                    }
-
-                    let orig_linear = linear_index_original(orig_i, orig_j, orig_k);
-
-                    let rho = solution.rho[orig_linear];
-                    let rhou = solution.rhou[orig_linear];
-                    let rhov = solution.rhov[orig_linear];
-                    let rhow = solution.rhow[orig_linear];
-                    let rhoe = solution.rhoe[orig_linear];
-
-                    let gamma = solution.gamma.as_ref().map(|g| g[orig_linear]);
-
-                    let point_solution = Plot3DSolution {
-                        grid_index: 0,
-                        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
-                        rho: vec![rho],
-                        rhou: vec![rhou],
-                        rhov: vec![rhov],
-                        rhow: vec![rhow],
-                        rhoe: vec![rhoe],
-                        gamma: gamma.map(|g| vec![g]),
-                        metadata: None,
-                    };
-
-                    let value = compute_scalar_field_value(&point_solution, field_enum);
-                    values.push(value);
-                }
-            }
-        }
-        "I" => {
-            // Constant I plane: sliced grid has dimensions (j_orig x k_orig x 1)
-            // The sliced dimensions are remapped: i_slice=j_orig, j_slice=k_orig
-            // Each point (j,k) in sliced grid maps to (slice_idx,j,k) in original
-            for k_idx in 0..j_slice {
-                // j_slice becomes k for the loop
-                for j_idx in 0..i_slice {
-                    // i_slice becomes j for the loop
-                    let orig_i = slice_idx;
-                    let orig_j = j_idx;
-                    let orig_k = k_idx;
-
-                    if orig_i >= i_orig || orig_j >= j_orig || orig_k >= k_orig {
-                        return Err(format!(
-                            "I-slice mapping out of bounds: ({},{},{}) not in ({},{},{})",
-                            orig_i, orig_j, orig_k, i_orig, j_orig, k_orig
-                        ));
-                    }
-
-                    let orig_linear = linear_index_original(orig_i, orig_j, orig_k);
-
-                    let rho = solution.rho[orig_linear];
-                    let rhou = solution.rhou[orig_linear];
-                    let rhov = solution.rhov[orig_linear];
-                    let rhow = solution.rhow[orig_linear];
-                    let rhoe = solution.rhoe[orig_linear];
-
-                    let gamma = solution.gamma.as_ref().map(|g| g[orig_linear]);
-
-                    let point_solution = Plot3DSolution {
-                        grid_index: 0,
-                        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
-                        rho: vec![rho],
-                        rhou: vec![rhou],
-                        rhov: vec![rhov],
-                        rhow: vec![rhow],
-                        rhoe: vec![rhoe],
-                        gamma: gamma.map(|g| vec![g]),
-                        metadata: None,
-                    };
-
-                    let value = compute_scalar_field_value(&point_solution, field_enum);
-                    values.push(value);
-                }
-            }
-        }
-        _ => {
-            return Err(format!(
-                "Invalid slice plane: {}. Must be 'I', 'J', or 'K'",
-                slice_plane
-            ))
-        }
+    if decimation_factor > 1 {
+        log_info(&format!(
+            "Grid size {}x{} - applying {}x decimation for performance",
+            i, j, decimation_factor
+        ));
     }
 
-    // Convert values to colors
-    let colors = compute_colors(&values, &scheme);
-    log_debug(&format!(
-        "Computed {} colors for slice {}{}",
-        colors.len() / 3,
-        slice_plane,
-        slice_index
-    ));
-
-    // Create mesh geometry from sliced grid
-    // Use decimation_factor=1 for consistency with the sliced geometry size
-    let mut mesh =
-        sliced_grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), 1);
-    mesh.colors = Some(colors);
+    let mesh =
+        grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
 
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
 }
 
-/// Compute scalar field colors for an arbitrary plane slice with solution data  
-/// Uses vertex interpolation data to map arbitrary plane intersection points to solution values
+/// Slice a cached grid along I/J/K plane (ID-based)
+#[allow(non_snake_case)]
 #[tauri::command]
-fn compute_solution_colors_arbitrary_plane(
-    grid: Plot3DGrid,
-    grid_index: usize,
+fn slice_grid_by_id(gridId: String, plane: String, index: u32) -> Result<Plot3DGrid, String> {
+    log_debug(&format!(
+        "Slicing cached grid {} along {} plane at index {}",
+        gridId, plane, index
+    ));
+
+    // Load grid from cache
+    let grid = {
+        let cache = GRID_CACHE
+            .lock()
+            .map_err(|_| "Grid cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&gridId)
+            .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
+        Arc::clone(&cached.grid)
+    };
+
+    grid.slice_grid(&plane, index).map_err(|e| {
+        let error_msg = format!("Failed to slice grid: {}", e);
+        log_error(&error_msg);
+        error_msg
+    })
+}
+
+/// Slice a cached grid with arbitrary plane (ID-based)
+#[allow(non_snake_case)]
+#[tauri::command]
+fn slice_arbitrary_plane_by_id(
+    gridId: String,
+    planePoint: [f32; 3],
+    planeNormal: [f32; 3],
+    respect_iblank: Option<bool>,
+    _window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    log_debug(&format!(
+        "Slicing cached grid {} with arbitrary plane: point={:?}, normal={:?}",
+        gridId, planePoint, planeNormal
+    ));
+
+    // Load grid from cache
+    let grid = {
+        let cache = GRID_CACHE
+            .lock()
+            .map_err(|_| "Grid cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&gridId)
+            .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
+        Arc::clone(&cached.grid)
+    };
+
+    let result =
+        grid.slice_arbitrary_plane(planePoint, planeNormal, respect_iblank.unwrap_or(false));
+
+    match &result {
+        Ok(mesh) => {
+            log_info(&format!(
+                "Arbitrary plane slice generated: {} vertices, {} triangles",
+                mesh.vertex_count,
+                mesh.triangle_indices.len() / 3
+            ));
+        }
+        Err(e) => {
+            log_error(&format!("Failed to slice arbitrary plane: {}", e));
+        }
+    }
+
+    result
+}
+
+/// Compute solution colors using cached grid and solution (ID-based)
+#[allow(non_snake_case)]
+#[tauri::command]
+fn compute_solution_colors(
+    gridId: String,
+    solutionId: String,
     field: String,
-    color_scheme: String,
-    plane_point: [f32; 3],
-    plane_normal: [f32; 3],
+    colorScheme: String,
     respect_iblank: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, ColorScheme, ScalarField};
+    use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
 
-    log_debug(&format!(
-        "compute_solution_colors_arbitrary_plane called: field={}, grid={}",
-        field, grid_index
-    ));
-    let _ = window.emit(
-        "loading-start",
-        format!("Computing {} field on arbitrary plane...", field),
-    );
+    let _ = window.emit("loading-start", format!("Computing {} field...", field));
 
-    let field_enum =
-        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
-
-    let scheme = ColorScheme::from_str(&color_scheme)
-        .ok_or_else(|| format!("Unknown color scheme: {}", color_scheme))?;
-
-    // Get the cached solution for this grid
-    let solution = {
-        let store = SOLUTION_CACHE
+    // Load grid from cache
+    let grid = {
+        let cache = GRID_CACHE
             .lock()
-            .map_err(|_| "Solution cache lock poisoned".to_string())?;
-        let cached = store
-            .iter()
-            .find(|sol| sol.grid_index == grid_index)
-            .ok_or_else(|| format!("No cached solution for grid index {}", grid_index))?;
-        Arc::clone(cached)
+            .map_err(|_| "Grid cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&gridId)
+            .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
+        Arc::clone(&cached.grid)
     };
 
-    // Validate that solution dimensions match grid
+    // Load solution from cache
+    let solution = {
+        let cache = SOLUTION_CACHE_V2
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&solutionId)
+            .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
+        Arc::clone(&cached.solution)
+    };
+
+    // Parse field and scheme
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+    let scheme = ColorScheme::from_str(&colorScheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", colorScheme))?;
+
+    // Validate
     let grid_points = grid.total_points();
     if solution.rho.len() != grid_points {
         return Err(format!(
@@ -983,46 +881,273 @@ fn compute_solution_colors_arbitrary_plane(
         ));
     }
 
-    // Slice the grid with the arbitrary plane (enhanced version that tracks interpolation data)
+    // Auto-detect decimation
+    let i = grid.dimensions.i as usize;
+    let j = grid.dimensions.j as usize;
+    let max_dim = i.max(j);
+
+    let decimation_factor = if max_dim > 1000 {
+        4
+    } else if max_dim > 500 {
+        3
+    } else if max_dim > 250 {
+        2
+    } else {
+        1
+    };
+
+    if decimation_factor > 1 {
+        log_info(&format!(
+            "Solution grid size {}x{} - applying {}x decimation for performance",
+            i, j, decimation_factor
+        ));
+    }
+
+    // Compute colors
+    let values = compute_scalar_field_surface(&solution, field_enum, decimation_factor);
+    let colors = compute_colors(&values, &scheme);
+
+    let mut mesh =
+        grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
+    mesh.colors = Some(colors);
+
+    let _ = window.emit("loading-end", ());
+
+    Ok(mesh)
+}
+
+/// Compute solution colors for sliced grid using cached data (ID-based)
+#[allow(non_snake_case)]
+#[tauri::command]
+fn compute_solution_colors_sliced(
+    gridId: String,
+    solutionId: String,
+    slicePlane: String,
+    sliceIndex: u32,
+    field: String,
+    colorScheme: String,
+    respect_iblank: Option<bool>,
+    window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    use solution::{compute_colors, ColorScheme, ScalarField};
+
+    let _ = window.emit(
+        "loading-start",
+        format!("Computing {} field on slice...", field),
+    );
+
+    // Load grid from cache
+    let original_grid = {
+        let cache = GRID_CACHE
+            .lock()
+            .map_err(|_| "Grid cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&gridId)
+            .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
+        Arc::clone(&cached.grid)
+    };
+
+    // Load solution from cache
+    let solution = {
+        let cache = SOLUTION_CACHE_V2
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&solutionId)
+            .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
+        Arc::clone(&cached.solution)
+    };
+
+    // Parse field and scheme
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+    let scheme = ColorScheme::from_str(&colorScheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", colorScheme))?;
+
+    // Perform slice
+    let sliced_grid = original_grid
+        .slice_grid(&slicePlane, sliceIndex)
+        .map_err(|e| format!("Failed to slice grid: {}", e))?;
+
+    // Validate solution matches original grid
+    let grid_points = original_grid.total_points();
+    if solution.rho.len() != grid_points {
+        return Err(format!(
+            "Solution points {} != grid points {}",
+            solution.rho.len(),
+            grid_points
+        ));
+    }
+
+    // Extract dimensions
+    let i_orig = original_grid.dimensions.i as usize;
+    let j_orig = original_grid.dimensions.j as usize;
+    let _k_orig = original_grid.dimensions.k as usize;
+
+    let i_slice = sliced_grid.dimensions.i as usize;
+    let j_slice = sliced_grid.dimensions.j as usize;
+
+    let slice_idx = sliceIndex as usize;
+
+    // Map each point in sliced grid to original grid for solution values
+    let mut values = Vec::with_capacity(sliced_grid.total_points());
+
+    let linear_index_original =
+        |i: usize, j: usize, k: usize| -> usize { i + j * i_orig + k * i_orig * j_orig };
+
+    match slicePlane.to_uppercase().as_str() {
+        "K" => {
+            for j_idx in 0..j_slice {
+                for i_idx in 0..i_slice {
+                    let orig_linear = linear_index_original(i_idx, j_idx, slice_idx);
+                    let point_solution = create_point_solution(&solution, orig_linear);
+                    values.push(compute_scalar_field_value(&point_solution, field_enum));
+                }
+            }
+        }
+        "J" => {
+            for k_idx in 0..j_slice {
+                for i_idx in 0..i_slice {
+                    let orig_linear = linear_index_original(i_idx, slice_idx, k_idx);
+                    let point_solution = create_point_solution(&solution, orig_linear);
+                    values.push(compute_scalar_field_value(&point_solution, field_enum));
+                }
+            }
+        }
+        "I" => {
+            for k_idx in 0..j_slice {
+                for j_idx in 0..i_slice {
+                    let orig_linear = linear_index_original(slice_idx, j_idx, k_idx);
+                    let point_solution = create_point_solution(&solution, orig_linear);
+                    values.push(compute_scalar_field_value(&point_solution, field_enum));
+                }
+            }
+        }
+        _ => {
+            return Err(format!("Invalid slice plane: {}", slicePlane));
+        }
+    }
+
+    let colors = compute_colors(&values, &scheme);
+
+    let mut mesh =
+        sliced_grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), 1);
+    mesh.colors = Some(colors);
+
+    let _ = window.emit("loading-end", ());
+
+    Ok(mesh)
+}
+
+/// Helper function to create a point solution from a solution array at a given index
+fn create_point_solution(solution: &Plot3DSolution, index: usize) -> Plot3DSolution {
+    Plot3DSolution {
+        grid_index: 0,
+        dimensions: GridDimensions { i: 1, j: 1, k: 1 },
+        rho: vec![solution.rho[index]],
+        rhou: vec![solution.rhou[index]],
+        rhov: vec![solution.rhov[index]],
+        rhow: vec![solution.rhow[index]],
+        rhoe: vec![solution.rhoe[index]],
+        gamma: solution.gamma.as_ref().map(|g| vec![g[index]]),
+        metadata: None,
+    }
+}
+
+/// Compute solution colors for arbitrary plane using cached data (ID-based)
+#[allow(non_snake_case)]
+#[tauri::command]
+fn compute_solution_colors_arbitrary_plane(
+    gridId: String,
+    solutionId: String,
+    planePoint: [f32; 3],
+    planeNormal: [f32; 3],
+    field: String,
+    colorScheme: String,
+    respect_iblank: Option<bool>,
+    window: WebviewWindow,
+) -> Result<MeshGeometry, String> {
+    use solution::{compute_colors, ColorScheme, ScalarField};
+
+    let _ = window.emit(
+        "loading-start",
+        format!("Computing {} field on arbitrary plane...", field),
+    );
+
+    // Load grid from cache
+    let grid = {
+        let cache = GRID_CACHE
+            .lock()
+            .map_err(|_| "Grid cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&gridId)
+            .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
+        Arc::clone(&cached.grid)
+    };
+
+    // Load solution from cache
+    let solution = {
+        let cache = SOLUTION_CACHE_V2
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&solutionId)
+            .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
+        Arc::clone(&cached.solution)
+    };
+
+    // Parse field and scheme
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+    let scheme = ColorScheme::from_str(&colorScheme)
+        .ok_or_else(|| format!("Unknown color scheme: {}", colorScheme))?;
+
+    // Validate
+    let grid_points = grid.total_points();
+    if solution.rho.len() != grid_points {
+        return Err(format!(
+            "Solution points {} != grid points {}",
+            solution.rho.len(),
+            grid_points
+        ));
+    }
+
+    // Slice with solution tracking
     let mut mesh = grid.slice_arbitrary_plane_with_solution(
-        plane_point,
-        plane_normal,
+        planePoint,
+        planeNormal,
         respect_iblank.unwrap_or(false),
     )?;
 
-    // Get vertex cell data
     let vertex_cell_data = mesh
         .vertex_cell_data
         .as_ref()
         .ok_or_else(|| "No vertex cell data available".to_string())?;
 
-    // Extract grid dimensions for linear indexing
+    // Interpolate solution values (same as existing command)
     let i_orig = grid.dimensions.i as usize;
     let j_orig = grid.dimensions.j as usize;
     let linear_index =
         |i: usize, j: usize, k: usize| -> usize { i + j * i_orig + k * i_orig * j_orig };
 
-    // Interpolate solution values for each vertex
     let mut values = Vec::with_capacity(vertex_cell_data.len());
 
     for cell_data in vertex_cell_data {
-        // Get the 8 corner indices of the cell
         let i = cell_data.cell_i;
         let j = cell_data.cell_j;
         let k = cell_data.cell_k;
 
         let corner_indices = [
-            linear_index(i, j, k),             // 0
-            linear_index(i + 1, j, k),         // 1
-            linear_index(i + 1, j + 1, k),     // 2
-            linear_index(i, j + 1, k),         // 3
-            linear_index(i, j, k + 1),         // 4
-            linear_index(i + 1, j, k + 1),     // 5
-            linear_index(i + 1, j + 1, k + 1), // 6
-            linear_index(i, j + 1, k + 1),     // 7
+            linear_index(i, j, k),
+            linear_index(i + 1, j, k),
+            linear_index(i + 1, j + 1, k),
+            linear_index(i, j + 1, k),
+            linear_index(i, j, k + 1),
+            linear_index(i + 1, j, k + 1),
+            linear_index(i + 1, j + 1, k + 1),
+            linear_index(i, j + 1, k + 1),
         ];
 
-        // Interpolate solution variables using the weights
         let mut rho = 0.0;
         let mut rhou = 0.0;
         let mut rhov = 0.0;
@@ -1042,7 +1167,6 @@ fn compute_solution_colors_arbitrary_plane(
             }
         }
 
-        // Create a temporary solution at this interpolated point
         let point_solution = Plot3DSolution {
             grid_index: 0,
             dimensions: GridDimensions { i: 1, j: 1, k: 1 },
@@ -1051,32 +1175,171 @@ fn compute_solution_colors_arbitrary_plane(
             rhov: vec![rhov],
             rhow: vec![rhow],
             rhoe: vec![rhoe],
-            gamma: if solution.gamma.is_some() {
-                Some(vec![gamma_val])
-            } else {
-                None
-            },
+            gamma: solution.gamma.as_ref().map(|_| vec![gamma_val]),
             metadata: None,
         };
 
-        // Compute scalar field value
-        let value = compute_scalar_field_value(&point_solution, field_enum);
-        values.push(value);
+        values.push(compute_scalar_field_value(&point_solution, field_enum));
     }
 
-    // Convert values to colors
     let colors = compute_colors(&values, &scheme);
-    log_debug(&format!(
-        "Computed {} colors for arbitrary plane slice",
-        colors.len() / 3
-    ));
-
-    // Add colors to mesh
     mesh.colors = Some(colors);
 
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
+}
+
+// ============================================================================
+// Cache Management Commands
+// ============================================================================
+
+/// List all cached grids with their metadata
+#[tauri::command]
+fn list_cached_grids() -> Result<Vec<GridMetadata>, String> {
+    let cache = GRID_CACHE
+        .lock()
+        .map_err(|_| "Grid cache lock poisoned".to_string())?;
+
+    let metadata: Vec<GridMetadata> = cache
+        .values()
+        .map(|cached| {
+            let has_solution = SOLUTION_CACHE_V2
+                .lock()
+                .ok()
+                .and_then(|sol_cache| {
+                    sol_cache
+                        .values()
+                        .any(|s| {
+                            s.file_path == cached.file_path && s.grid_index == cached.grid_index
+                        })
+                        .then_some(true)
+                })
+                .unwrap_or(false);
+
+            GridMetadata {
+                id: cached.id.clone(),
+                file_path: cached.file_path.clone(),
+                file_name: cached.file_name.clone(),
+                grid_index: cached.grid_index,
+                dimensions: cached.grid.dimensions.clone(),
+                has_iblank: cached.has_iblank,
+                has_solution,
+            }
+        })
+        .collect();
+
+    Ok(metadata)
+}
+
+/// List all cached solutions with their metadata
+#[tauri::command]
+fn list_cached_solutions() -> Result<Vec<SolutionMetadata>, String> {
+    let cache = SOLUTION_CACHE_V2
+        .lock()
+        .map_err(|_| "Solution cache lock poisoned".to_string())?;
+
+    let metadata: Vec<SolutionMetadata> = cache
+        .values()
+        .map(|cached| SolutionMetadata {
+            id: cached.id.clone(),
+            file_path: cached.file_path.clone(),
+            file_name: cached.file_name.clone(),
+            grid_index: cached.grid_index,
+            dimensions: cached.solution.dimensions.clone(),
+        })
+        .collect();
+
+    Ok(metadata)
+}
+
+/// Get metadata for a specific cached grid
+#[tauri::command]
+fn get_grid_metadata(grid_id: String) -> Result<GridMetadata, String> {
+    let cache = GRID_CACHE
+        .lock()
+        .map_err(|_| "Grid cache lock poisoned".to_string())?;
+
+    let cached = cache
+        .get(&grid_id)
+        .ok_or_else(|| format!("Grid not found in cache: {}", grid_id))?;
+
+    let has_solution = SOLUTION_CACHE_V2
+        .lock()
+        .ok()
+        .and_then(|sol_cache| {
+            sol_cache
+                .values()
+                .any(|s| s.file_path == cached.file_path && s.grid_index == cached.grid_index)
+                .then_some(true)
+        })
+        .unwrap_or(false);
+
+    Ok(GridMetadata {
+        id: cached.id.clone(),
+        file_path: cached.file_path.clone(),
+        file_name: cached.file_name.clone(),
+        grid_index: cached.grid_index,
+        dimensions: cached.grid.dimensions.clone(),
+        has_iblank: cached.has_iblank,
+        has_solution,
+    })
+}
+
+/// Clear all cached grids
+#[tauri::command]
+fn clear_grid_cache() -> Result<(), String> {
+    let mut cache = GRID_CACHE
+        .lock()
+        .map_err(|_| "Grid cache lock poisoned".to_string())?;
+
+    let count = cache.len();
+    cache.clear();
+    log_info(&format!("Cleared {} grids from cache", count));
+    Ok(())
+}
+
+/// Clear all cached solutions (v2 cache)
+#[tauri::command]
+fn clear_solution_cache_v2() -> Result<(), String> {
+    let mut cache = SOLUTION_CACHE_V2
+        .lock()
+        .map_err(|_| "Solution cache lock poisoned".to_string())?;
+
+    let count = cache.len();
+    cache.clear();
+    log_info(&format!("Cleared {} solutions from cache", count));
+    Ok(())
+}
+
+/// Unload a specific grid from cache
+#[tauri::command]
+fn unload_grid(grid_id: String) -> Result<(), String> {
+    let mut cache = GRID_CACHE
+        .lock()
+        .map_err(|_| "Grid cache lock poisoned".to_string())?;
+
+    if cache.remove(&grid_id).is_some() {
+        log_info(&format!("Unloaded grid from cache: {}", grid_id));
+        Ok(())
+    } else {
+        Err(format!("Grid not found in cache: {}", grid_id))
+    }
+}
+
+/// Unload a specific solution from cache
+#[tauri::command]
+fn unload_solution(solution_id: String) -> Result<(), String> {
+    let mut cache = SOLUTION_CACHE_V2
+        .lock()
+        .map_err(|_| "Solution cache lock poisoned".to_string())?;
+
+    if cache.remove(&solution_id).is_some() {
+        log_info(&format!("Unloaded solution from cache: {}", solution_id));
+        Ok(())
+    } else {
+        Err(format!("Solution not found in cache: {}", solution_id))
+    }
 }
 
 #[tauri::command]
@@ -1223,18 +1486,26 @@ pub fn run() {
             greet,
             load_plot3d_file,
             load_plot3d_file_ascii,
+            load_plot3d_file_cached,
             load_plot3d_solution,
             load_plot3d_solution_ascii,
             load_plot3d_solution_auto,
+            load_plot3d_solution_cached,
             load_plot3d_function,
             convert_grid_to_mesh,
-            slice_grid,
-            slice_arbitrary_plane,
+            convert_grid_to_mesh_by_id,
+            slice_grid_by_id,
+            slice_arbitrary_plane_by_id,
             compute_solution_colors,
-            compute_solution_colors_cached,
-            compute_solution_colors_only_cached,
             compute_solution_colors_sliced,
             compute_solution_colors_arbitrary_plane,
+            list_cached_grids,
+            list_cached_solutions,
+            get_grid_metadata,
+            clear_grid_cache,
+            clear_solution_cache_v2,
+            unload_grid,
+            unload_solution,
             open_file_dialog,
             open_multiple_files_dialog,
             detect_file_format,

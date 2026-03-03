@@ -18,11 +18,19 @@ export function SolutionViewer({ selectedGrid, onScalarFieldChange, onColorSchem
     const [fieldStats, setFieldStats] = useState<{ min: number, max: number, mean: number, stdDev: number } | null>(null);
     const statsRequestRef = useRef(0);
 
-    const hasSolution = selectedGrid?.solution !== undefined;
+    const hasSolution = selectedGrid?.hasSolution === true;
 
     // Compute field stats in chunks to keep the UI responsive on large grids
     useEffect(() => {
-        if (!hasSolution || !selectedGrid?.solution || selectedField === 'none') {
+        if (!hasSolution || selectedField === 'none') {
+            setFieldStats(null);
+            return;
+        }
+
+        // If we have the full solution data (v1 API), compute stats
+        if (!selectedGrid?.solution) {
+            // For v2 API (cached backend), stats computation is deferred
+            // The stats will be computed on the backend when needed
             setFieldStats(null);
             return;
         }

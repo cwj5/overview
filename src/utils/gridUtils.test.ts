@@ -17,8 +17,11 @@ const makeItem = (overrides: Partial<GridItem>): GridItem => ({
     filePath: overrides.filePath ?? "/tmp/fileA.p3d",
     fileName: overrides.fileName ?? "fileA.p3d",
     gridIndex: overrides.gridIndex ?? 0,
+    dimensions: overrides.dimensions ?? { i: 2, j: 2, k: 2 },
+    hasIblank: overrides.hasIblank ?? false,
     color: overrides.color ?? "#6366f1",
     visible: overrides.visible ?? true,
+    hasSolution: overrides.hasSolution ?? false,
 });
 
 describe("groupGridsByFile", () => {

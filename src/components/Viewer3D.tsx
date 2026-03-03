@@ -364,7 +364,6 @@ export default function Viewer3D({
     const [meshById, setMeshById] = useState<Record<string, MeshGeometry>>({});
     const [loadingById, setLoadingById] = useState<Record<string, number>>({});
     const [error, setError] = useState<string | null>(null);
-    const cleanGridCacheRef = useRef<Record<string, SerializableGrid>>({});
     const autoCreatedSlicesRef = useRef(false);
 
     type MeshResult = { id: string; mesh: MeshGeometry } | { id: string; error: string };
@@ -555,32 +554,6 @@ export default function Viewer3D({
             return next;
         });
 
-        const getCleanGrid = async (gridItem: GridItem): Promise<SerializableGrid> => {
-            const cached = cleanGridCacheRef.current[gridItem.id];
-            if (cached) {
-                return cached;
-            }
-            if (!gridItem.grid.x_coords || !gridItem.grid.y_coords || !gridItem.grid.z_coords) {
-                throw new Error(
-                    `Missing coordinate arrays: x:${!!gridItem.grid.x_coords}, y:${!!gridItem.grid.y_coords}, z:${!!gridItem.grid.z_coords}`
-                );
-            }
-            await new Promise((resolve) => setTimeout(resolve, 0));
-            const cleanGrid = {
-                dimensions: {
-                    i: gridItem.grid.dimensions.i,
-                    j: gridItem.grid.dimensions.j,
-                    k: gridItem.grid.dimensions.k,
-                },
-                x_coords: Array.from(gridItem.grid.x_coords),
-                y_coords: Array.from(gridItem.grid.y_coords),
-                z_coords: Array.from(gridItem.grid.z_coords),
-                iblank: gridItem.grid.iblank ? Array.from(gridItem.grid.iblank) : undefined,
-            };
-            cleanGridCacheRef.current[gridItem.id] = cleanGrid;
-            return cleanGrid;
-        };
-
         // If arbitrary planes need regeneration, clear existing arbitrary meshes first to avoid remnants
         if (needArbitraryRegen) {
             setMeshById((prev) => {
@@ -606,25 +579,26 @@ export default function Viewer3D({
                     return Promise.all(
                         grids.map(async (gridItem) => {
                             try {
-                                const cleanGrid = await getCleanGrid(gridItem);
                                 let mesh: MeshGeometry;
 
                                 // Try to apply solution colors if available
-                                if (gridItem.solution && scalarField !== 'none') {
+                                if (gridItem.hasSolution && scalarField !== 'none' && gridItem.solutionCacheId) {
                                     try {
                                         logger.debug(
                                             `Attempting solution coloring for arbitrary plane '${arbitrarySlice.name}' on grid ${gridItem.id}`,
                                             'Viewer3D'
                                         );
+
                                         mesh = await invoke<MeshGeometry>('compute_solution_colors_arbitrary_plane', {
-                                            grid: cleanGrid,
-                                            gridIndex: gridItem.gridIndex,
+                                            gridId: gridItem.gridCacheId!,
+                                            solutionId: gridItem.solutionCacheId,
                                             field: scalarField,
                                             colorScheme: colorScheme,
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
                                             respect_iblank: !ignoreIblank,
                                         });
+
                                         const hasColors = mesh.colors && mesh.colors.length > 0;
                                         void invoke('frontend_log', {
                                             message: `[Viewer3D] Arbitrary plane '${arbitrarySlice.name}': Colors ${hasColors ? 'YES' : 'NO'} (${mesh.colors?.length || 0} values)`
@@ -635,16 +609,18 @@ export default function Viewer3D({
                                             message: `[Viewer3D] Solution coloring FAILED on arbitrary plane '${arbitrarySlice.name}': ${colorErr}`
                                         });
                                         logger.error(`Solution coloring on arbitrary plane failed: ${colorErr}`, 'Viewer3D');
-                                        mesh = await invoke<MeshGeometry>('slice_arbitrary_plane', {
-                                            grid: cleanGrid,
+
+                                        mesh = await invoke<MeshGeometry>('slice_arbitrary_plane_by_id', {
+                                            gridId: gridItem.gridCacheId!,
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
+                                            respect_iblank: !ignoreIblank,
                                         });
                                     }
                                 } else {
                                     // No solution data - use base geometry
-                                    mesh = await invoke<MeshGeometry>('slice_arbitrary_plane', {
-                                        grid: cleanGrid,
+                                    mesh = await invoke<MeshGeometry>('slice_arbitrary_plane_by_id', {
+                                        gridId: gridItem.gridCacheId!,
                                         planePoint: arbitrarySlice.planePoint,
                                         planeNormal: arbitrarySlice.planeNormal,
                                         respect_iblank: !ignoreIblank,
@@ -678,43 +654,31 @@ export default function Viewer3D({
             missing.map(async (gridItem) => {
                 try {
                     const gridStart = performance.now();
-                    let cleanGrid = await getCleanGrid(gridItem);
                     let mesh: MeshGeometry;
 
                     // Apply all I/J/K slices for this grid if enabled
                     if (sliceEnabled && gridSlices[gridItem.id] && gridSlices[gridItem.id].length > 0) {
                         try {
-                            // Render each I/J/K slice independently from the original grid
-                            const slicePromises = gridSlices[gridItem.id].map(async (slice) => {
-                                const slicedGrid = await invoke<SerializableGrid>('slice_grid', {
-                                    grid: cleanGrid,
-                                    plane: slice.plane,
-                                    index: slice.index,
-                                });
-                                logger.debug(`Applied ${slice.plane} slice at index ${slice.index}`, 'Viewer3D');
-                                return { sliceId: slice.id, grid: slicedGrid, slice };
-                            });
-
-                            const sliceResults = await Promise.all(slicePromises);
-
                             // Generate meshes for each slice with solution colors if available
                             const sliceMeshes = await Promise.all(
-                                sliceResults.map(async ({ sliceId, grid, slice }) => {
+                                gridSlices[gridItem.id].map(async (slice) => {
                                     let sliceMesh: MeshGeometry;
+
                                     // Try to apply solution colors to sliced geometry
-                                    if (gridItem.solution && scalarField !== 'none') {
+                                    if (gridItem.hasSolution && scalarField !== 'none' && gridItem.solutionCacheId) {
                                         try {
                                             logger.debug(`Attempting solution coloring for slice ${slice.plane}${slice.index}...`, 'Viewer3D');
+
                                             sliceMesh = await invoke<MeshGeometry>('compute_solution_colors_sliced', {
-                                                slicedGrid: grid,
-                                                originalGrid: cleanGrid,
-                                                gridIndex: gridItem.gridIndex,
-                                                field: scalarField,
-                                                colorScheme: colorScheme,
+                                                gridId: gridItem.gridCacheId!,
+                                                solutionId: gridItem.solutionCacheId,
                                                 slicePlane: slice.plane,
                                                 sliceIndex: slice.index,
+                                                field: scalarField,
+                                                colorScheme: colorScheme,
                                                 respect_iblank: !ignoreIblank,
                                             });
+
                                             const hasColors = sliceMesh.colors && sliceMesh.colors.length > 0;
                                             void invoke('frontend_log', {
                                                 message: `[Viewer3D] Slice ${slice.plane}${slice.index}: Colors ${hasColors ? 'YES' : 'NO'} (${sliceMesh.colors?.length || 0} values for ${sliceMesh.vertices.length} bytes vertices)`
@@ -725,19 +689,30 @@ export default function Viewer3D({
                                                 message: `[Viewer3D] Solution coloring FAILED on slice ${slice.plane}${slice.index}: ${colorErr}`
                                             });
                                             logger.error(`Solution coloring on slice (${slice.plane}${slice.index}) failed: ${colorErr}`, 'Viewer3D');
+
+                                            const slicedGrid = await invoke<SerializableGrid>('slice_grid_by_id', {
+                                                gridId: gridItem.gridCacheId!,
+                                                plane: slice.plane,
+                                                index: slice.index,
+                                            });
                                             sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
-                                                grid: grid,
+                                                grid: slicedGrid,
                                                 respect_iblank: !ignoreIblank
                                             });
                                         }
                                     } else {
                                         // No solution data - use base geometry
+                                        const slicedGrid = await invoke<SerializableGrid>('slice_grid_by_id', {
+                                            gridId: gridItem.gridCacheId!,
+                                            plane: slice.plane,
+                                            index: slice.index,
+                                        });
                                         sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
-                                            grid: grid,
+                                            grid: slicedGrid,
                                             respect_iblank: !ignoreIblank
                                         });
                                     }
-                                    return { sliceId, mesh: sliceMesh };
+                                    return { sliceId: slice.id, mesh: sliceMesh };
                                 })
                             );
 
@@ -825,24 +800,24 @@ export default function Viewer3D({
                             throw sliceErr;
                         }
                     } else {
-                        // No slicing - use the original grid
-                        if (gridItem.solution && scalarField !== 'none') {
+                        // No slicing - use the original grid (fallback path, shouldn't normally be reached)
+                        if (gridItem.hasSolution && scalarField !== 'none' && gridItem.solutionCacheId) {
                             try {
-                                mesh = await invoke<MeshGeometry>('compute_solution_colors_cached', {
-                                    grid: cleanGrid,
-                                    gridIndex: gridItem.gridIndex,
+                                mesh = await invoke<MeshGeometry>('compute_solution_colors', {
+                                    gridId: gridItem.gridCacheId!,
+                                    solutionId: gridItem.solutionCacheId,
                                     field: scalarField,
                                     colorScheme: colorScheme,
                                     respect_iblank: !ignoreIblank,
                                 });
                             } catch (invokeErr) {
                                 const invokeMsg = String(invokeErr);
-                                logger.error(`[${gridItem.id}] compute_solution_colors_cached FAILED: ${invokeMsg}`, 'Viewer3D');
+                                logger.error(`[${gridItem.id}] compute_solution_colors FAILED: ${invokeMsg}`, 'Viewer3D');
                                 throw invokeErr;
                             }
                         } else {
-                            mesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
-                                grid: cleanGrid,
+                            mesh = await invoke<MeshGeometry>('convert_grid_to_mesh_cached', {
+                                gridId: gridItem.gridCacheId!,
                                 respect_iblank: !ignoreIblank
                             });
                         }
