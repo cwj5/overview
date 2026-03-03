@@ -72,7 +72,7 @@ const App = () => {
   const [currentScalarField, setCurrentScalarField] = useState<ScalarField>('none');
   const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
   const [showWireframe, setShowWireframe] = useState(true);
-  const [shadingMode, setShadingMode] = useState<'none' | 'flat' | 'smooth'>('none');
+  const [shadingMode, setShadingMode] = useState<'none' | 'smooth'>('none');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sliceEnabled, setSliceEnabled] = useState(true);
   const [grids, setGrids] = useState<GridItem[]>([]);

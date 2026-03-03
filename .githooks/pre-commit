@@ -24,6 +24,23 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
+# Run build
+cd "${REPO_ROOT}/src-tauri" && npm run tauri build > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo -e "${RED}✗ Build failed${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ Build succeeded${NC}"
+fi
+
+cd "${REPO_ROOT}/src-tauri" && cargo build -p overview > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo -e "${RED}✗ Rust build failed${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ Rust build succeeded${NC}"
+fi
+
 # Run TypeScript tests
 echo -e "${YELLOW}Running TypeScript tests...${NC}"
 TS_TEST_OUTPUT=$(npm test 2>&1)
