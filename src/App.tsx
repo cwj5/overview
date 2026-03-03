@@ -232,14 +232,6 @@ const App = () => {
         // Separator
         const separator = await PredefinedMenuItem.new({ item: "Separator" });
 
-        // Shading mode options
-        const flatShadingItem = await CheckMenuItem.new({
-          id: "shading-flat",
-          text: "Flat Shading",
-          checked: shadingMode === 'flat',
-          action: () => setShadingMode(shadingMode === 'flat' ? 'none' : 'flat'),
-        });
-
         const smoothShadingItem = await CheckMenuItem.new({
           id: "shading-smooth",
           text: "Smooth Shading",
@@ -258,7 +250,6 @@ const App = () => {
             ignoreIblankItem,
             separator,
             wireframeItem,
-            flatShadingItem,
             smoothShadingItem,
           ],
         });

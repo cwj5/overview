@@ -1,7 +1,7 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { BufferGeometry, BufferAttribute, ShaderMaterial, DoubleSide } from 'three';
+import { BufferGeometry, BufferAttribute, ShaderMaterial } from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/logger';
 import type { GridItem, GridSlice, ArbitrarySlice } from '../types/grids';
@@ -35,7 +35,7 @@ interface Viewer3DProps {
     scalarField?: ScalarField;
     colorScheme?: ColorScheme;
     showWireframe?: boolean;
-    shadingMode?: 'none' | 'flat' | 'smooth';
+    shadingMode?: 'none' | 'smooth';
     sliceEnabled?: boolean;
     gridSlices?: Record<string, GridSlice[]>;
     arbitrarySlices?: ArbitrarySlice[];
@@ -47,12 +47,10 @@ function SolidMeshRenderer({
     meshGeometry,
     color,
     dimmed,
-    flatShading = false,
 }: {
     meshGeometry: MeshGeometry;
     color: string;
     dimmed: boolean;
-    flatShading?: boolean;
 }) {
     // Shader for field quantity colors (vertex colors) - both sides equally visible
     const vertexColorMaterial = useMemo(() => {
@@ -971,16 +969,6 @@ export default function Viewer3D({
                                     meshGeometry={mesh}
                                     color={gridItem.color}
                                     dimmed={dimmed}
-                                    flatShading={false}
-                                />
-                            )}
-                            {/* Render flat shaded surface */}
-                            {shadingMode === 'flat' && (
-                                <SolidMeshRenderer
-                                    meshGeometry={mesh}
-                                    color={gridItem.color}
-                                    dimmed={dimmed}
-                                    flatShading={true}
                                 />
                             )}
                             {/* Render wireframe */}
@@ -1013,15 +1001,6 @@ export default function Viewer3D({
                                         meshGeometry={mesh}
                                         color={sliceColor}
                                         dimmed={false}
-                                        flatShading={false}
-                                    />
-                                )}
-                                {shadingMode === 'flat' && (
-                                    <SolidMeshRenderer
-                                        meshGeometry={mesh}
-                                        color={sliceColor}
-                                        dimmed={false}
-                                        flatShading={true}
                                     />
                                 )}
                                 {showWireframe && (
