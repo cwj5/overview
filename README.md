@@ -7,6 +7,10 @@
 [![Rust Tests](https://img.shields.io/badge/Rust_Tests-86%2F86-brightgreen)](https://github.com/cwj5/overview)
 [![Rust Coverage](https://img.shields.io/badge/Rust_Coverage-45.28%25-yellow)](https://github.com/cwj5/overview)
 
+[![Latest Linux Artifact](https://img.shields.io/badge/Linux-Download%20AppImage-blue)](https://github.com/cwj5/overview/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess)
+[![Latest Windows Artifact](https://img.shields.io/badge/Windows-Download%20MSI%2FNSIS-blue)](https://github.com/cwj5/overview/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess)
+[![Latest macOS Artifact](https://img.shields.io/badge/macOS-Download%20App-blue)](https://github.com/cwj5/overview/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess)
+
 A modern, cross-platform application for visualizing CFD (Computational Fluid Dynamics) grid and solution data in PLOT3D format.
 
 ## Features
@@ -134,6 +138,11 @@ Automated builds are handled via GitHub Actions. Binaries are built for:
 - **Windows**: MSI installer
 
 Builds run automatically on push to `main` branch and tagged releases. Artifacts are available in the GitHub Actions tab.
+
+Quick access to the latest downloadable artifacts:
+- Linux AppImage: https://github.com/cwj5/overview/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess
+- Windows MSI/NSIS: https://github.com/cwj5/overview/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess
+- macOS app bundles: https://github.com/cwj5/overview/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess
 
 PLOT3D is a NASA-developed format for storing CFD grid and solution data. For more information, see the [PLOT3D manual](https://ntrs.nasa.gov/api/citations/19900013774/downloads/19900013774.pdf).
 
