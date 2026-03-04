@@ -1,6 +1,7 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
@@ -290,210 +291,10 @@ impl Plot3DGrid {
         plane_normal: [f32; 3],
         respect_iblank: bool,
     ) -> Result<MeshGeometry, String> {
-        let i = self.dimensions.i as usize;
-        let j = self.dimensions.j as usize;
-        let k = self.dimensions.k as usize;
-
-        // Normalize the plane normal
-        let normal_mag = (plane_normal[0] * plane_normal[0]
-            + plane_normal[1] * plane_normal[1]
-            + plane_normal[2] * plane_normal[2])
-            .sqrt();
-        if normal_mag < 1e-10 {
-            return Err("Plane normal vector has zero magnitude".to_string());
-        }
-        let n = [
-            plane_normal[0] / normal_mag,
-            plane_normal[1] / normal_mag,
-            plane_normal[2] / normal_mag,
-        ];
-        let d = n[0] * plane_point[0] + n[1] * plane_point[1] + n[2] * plane_point[2];
-        let signed_distance =
-            |x: f32, y: f32, z: f32| -> f32 { n[0] * x + n[1] * y + n[2] * z - d };
-        let get_point = |i_idx: usize, j_idx: usize, k_idx: usize| -> [f32; 3] {
-            let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-            [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
-        };
-        let cell_has_blanked_corner = |i_idx: usize, j_idx: usize, k_idx: usize| -> bool {
-            if !respect_iblank {
-                return false;
-            }
-            let Some(iblank) = self.iblank.as_ref() else {
-                return false;
-            };
-
-            let corners = [
-                Self::linear_index(i_idx, j_idx, k_idx, i, j),
-                Self::linear_index(i_idx + 1, j_idx, k_idx, i, j),
-                Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j),
-                Self::linear_index(i_idx, j_idx + 1, k_idx, i, j),
-                Self::linear_index(i_idx, j_idx, k_idx + 1, i, j),
-                Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j),
-                Self::linear_index(i_idx + 1, j_idx + 1, k_idx + 1, i, j),
-                Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j),
-            ];
-
-            corners.iter().any(|&idx| iblank[idx] == 0)
-        };
-
-        // Hexahedral cell faces are not necessarily planar, so split each face into triangles
-        // For each cell, split faces consistently (e.g., always same diagonal)
-        // Each cell has 6 faces, each face is split into 2 triangles
-        // For each triangle, check intersection with plane
-
-        // Face definitions: each face is defined by 4 corner indices
-        // Consistent triangle split: (0,1,2,3) -> (0,1,2), (0,2,3)
-        // Hex corner indices:
-        // 0: (i,j,k), 1: (i+1,j,k), 2: (i+1,j+1,k), 3: (i,j+1,k)
-        // 4: (i,j,k+1), 5: (i+1,j,k+1), 6: (i+1,j+1,k+1), 7: (i,j+1,k+1)
-
-        let face_triangles = [
-            // Bottom face (k)
-            [(0, 1, 2), (0, 2, 3)],
-            // Top face (k+1)
-            [(4, 5, 6), (4, 6, 7)],
-            // Front face (j)
-            [(0, 1, 5), (0, 5, 4)],
-            // Back face (j+1)
-            [(3, 2, 6), (3, 6, 7)],
-            // Left face (i)
-            [(0, 3, 7), (0, 7, 4)],
-            // Right face (i+1)
-            [(1, 2, 6), (1, 6, 5)],
-        ];
-
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-
-        let epsilon = 1e-8;
-        for k_idx in 0..k - 1 {
-            for j_idx in 0..j - 1 {
-                for i_idx in 0..i - 1 {
-                    if cell_has_blanked_corner(i_idx, j_idx, k_idx) {
-                        continue;
-                    }
-
-                    // Get the 8 corners of the hexahedron
-                    let corners = [
-                        get_point(i_idx, j_idx, k_idx),             // 0
-                        get_point(i_idx + 1, j_idx, k_idx),         // 1
-                        get_point(i_idx + 1, j_idx + 1, k_idx),     // 2
-                        get_point(i_idx, j_idx + 1, k_idx),         // 3
-                        get_point(i_idx, j_idx, k_idx + 1),         // 4
-                        get_point(i_idx + 1, j_idx, k_idx + 1),     // 5
-                        get_point(i_idx + 1, j_idx + 1, k_idx + 1), // 6
-                        get_point(i_idx, j_idx + 1, k_idx + 1),     // 7
-                    ];
-
-                    // For each face, for each triangle
-                    for face in &face_triangles {
-                        for &(a, b, c) in face {
-                            let p = [corners[a], corners[b], corners[c]];
-                            let dists = [
-                                signed_distance(p[0][0], p[0][1], p[0][2]),
-                                signed_distance(p[1][0], p[1][1], p[1][2]),
-                                signed_distance(p[2][0], p[2][1], p[2][2]),
-                            ];
-                            // If all on same side, skip (with tolerance)
-                            if (dists[0] > epsilon && dists[1] > epsilon && dists[2] > epsilon)
-                                || (dists[0] < -epsilon
-                                    && dists[1] < -epsilon
-                                    && dists[2] < -epsilon)
-                            {
-                                continue;
-                            }
-                            // If any vertex is on the plane, register as intersection
-                            let mut intersection_points = Vec::new();
-                            for (idx, &dist) in dists.iter().enumerate() {
-                                if dist.abs() < epsilon {
-                                    intersection_points.push(p[idx]);
-                                }
-                            }
-                            // Find intersection points on edges
-                            for edge in &[(0, 1), (1, 2), (2, 0)] {
-                                let (i1, i2) = *edge;
-                                let dist1 = dists[i1];
-                                let dist2 = dists[i2];
-                                if dist1 * dist2 < 0.0
-                                    || dist1.abs() < epsilon
-                                    || dist2.abs() < epsilon
-                                {
-                                    // If either vertex is on the plane, add it
-                                    if dist1.abs() < epsilon {
-                                        intersection_points.push(p[i1]);
-                                    }
-                                    if dist2.abs() < epsilon {
-                                        intersection_points.push(p[i2]);
-                                    }
-                                    // Otherwise, interpolate intersection
-                                    if dist1 * dist2 < 0.0 {
-                                        let t = dist1.abs() / (dist1.abs() + dist2.abs());
-                                        let ip = [
-                                            p[i1][0] + t * (p[i2][0] - p[i1][0]),
-                                            p[i1][1] + t * (p[i2][1] - p[i1][1]),
-                                            p[i1][2] + t * (p[i2][2] - p[i1][2]),
-                                        ];
-                                        intersection_points.push(ip);
-                                    }
-                                }
-                            }
-                            // Remove duplicate points (within epsilon)
-                            let mut unique_points: Vec<[f32; 3]> = Vec::new();
-                            'outer: for ip in &intersection_points {
-                                for up in &unique_points {
-                                    if (ip[0] - up[0]).abs() < epsilon
-                                        && (ip[1] - up[1]).abs() < epsilon
-                                        && (ip[2] - up[2]).abs() < epsilon
-                                    {
-                                        continue 'outer;
-                                    }
-                                }
-                                unique_points.push(*ip);
-                            }
-                            // If we have at least 2 unique intersection points, form a segment
-                            if unique_points.len() >= 2 {
-                                let base_idx = vertices.len() / 3;
-                                for ip in &unique_points {
-                                    vertices.push(ip[0]);
-                                    vertices.push(ip[1]);
-                                    vertices.push(ip[2]);
-                                }
-                                // Add as line segments for each pair
-                                for seg in 0..unique_points.len() - 1 {
-                                    indices.push((base_idx + seg) as u32);
-                                    indices.push((base_idx + seg + 1) as u32);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if vertices.is_empty() {
-            return Err("No intersection found between plane and grid".to_string());
-        }
-
-        // For planar slice, normals are just the plane normal
-        let vertex_count = vertices.len() / 3;
-        let mut normals = vec![n[0]; vertex_count * 3];
-        for i in 0..vertex_count {
-            normals[i * 3] = n[0];
-            normals[i * 3 + 1] = n[1];
-            normals[i * 3 + 2] = n[2];
-        }
-
-        let segment_count = indices.len() / 2;
-        Ok(MeshGeometry {
-            vertices,
-            indices: indices.clone(), // Use same indices for wireframe
-            triangle_indices: indices,
-            normals,
-            vertex_count,
-            face_count: segment_count, // Number of segments
-            colors: None,
-            vertex_cell_data: None,
-        })
+        let mut mesh =
+            self.slice_arbitrary_plane_with_solution(plane_point, plane_normal, respect_iblank)?;
+        mesh.vertex_cell_data = None;
+        Ok(mesh)
     }
 
     /// Enhanced version of slice_arbitrary_plane that creates a triangulated surface
@@ -508,6 +309,10 @@ impl Plot3DGrid {
         let j = self.dimensions.j as usize;
         let k = self.dimensions.k as usize;
 
+        if i < 2 || j < 2 || k < 2 {
+            return Err("Grid dimensions must be at least 2x2x2 for arbitrary slicing".to_string());
+        }
+
         // Normalize the plane normal
         let normal_mag = (plane_normal[0] * plane_normal[0]
             + plane_normal[1] * plane_normal[1]
@@ -524,6 +329,54 @@ impl Plot3DGrid {
         let d = n[0] * plane_point[0] + n[1] * plane_point[1] + n[2] * plane_point[2];
         let signed_distance =
             |x: f32, y: f32, z: f32| -> f32 { n[0] * x + n[1] * y + n[2] * z - d };
+
+        let dot = |a: [f32; 3], b: [f32; 3]| -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] };
+        let cross = |a: [f32; 3], b: [f32; 3]| -> [f32; 3] {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let sub =
+            |a: [f32; 3], b: [f32; 3]| -> [f32; 3] { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] };
+
+        let mut min_pt = [f32::INFINITY, f32::INFINITY, f32::INFINITY];
+        let mut max_pt = [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for idx in 0..self.total_points() {
+            let x = self.x_coords[idx];
+            let y = self.y_coords[idx];
+            let z = self.z_coords[idx];
+            min_pt[0] = min_pt[0].min(x);
+            min_pt[1] = min_pt[1].min(y);
+            min_pt[2] = min_pt[2].min(z);
+            max_pt[0] = max_pt[0].max(x);
+            max_pt[1] = max_pt[1].max(y);
+            max_pt[2] = max_pt[2].max(z);
+        }
+        let bbox_diag = ((max_pt[0] - min_pt[0]).powi(2)
+            + (max_pt[1] - min_pt[1]).powi(2)
+            + (max_pt[2] - min_pt[2]).powi(2))
+        .sqrt();
+        let epsilon = (bbox_diag * 1e-6).max(1e-7);
+
+        let ref_axis = if n[0].abs() < 0.9 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let u_unnormalized = cross(n, ref_axis);
+        let u_mag = (u_unnormalized[0] * u_unnormalized[0]
+            + u_unnormalized[1] * u_unnormalized[1]
+            + u_unnormalized[2] * u_unnormalized[2])
+            .sqrt()
+            .max(1e-12);
+        let u = [
+            u_unnormalized[0] / u_mag,
+            u_unnormalized[1] / u_mag,
+            u_unnormalized[2] / u_mag,
+        ];
+        let v = cross(n, u);
 
         let get_point = |i_idx: usize, j_idx: usize, k_idx: usize| -> [f32; 3] {
             let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
@@ -550,99 +403,44 @@ impl Plot3DGrid {
 
             corners.iter().any(|&idx| iblank[idx] == 0)
         };
-
-        // Helper to compute trilinear interpolation weights for a point within a hex cell (unused for now)
-        let _compute_trilinear_weights = |point: [f32; 3], corners: &[[f32; 3]; 8]| -> [f32; 8] {
-            // Compute local coordinates (xi, eta, zeta) in [0,1]^3
-            // Using inverse trilinear interpolation (simplified approach)
-            // For a point inside a hex, find parametric coords by solving
-            // This is approximate - using simple averaging for now
-            let _center = [
-                (corners[0][0]
-                    + corners[1][0]
-                    + corners[2][0]
-                    + corners[3][0]
-                    + corners[4][0]
-                    + corners[5][0]
-                    + corners[6][0]
-                    + corners[7][0])
-                    / 8.0,
-                (corners[0][1]
-                    + corners[1][1]
-                    + corners[2][1]
-                    + corners[3][1]
-                    + corners[4][1]
-                    + corners[5][1]
-                    + corners[6][1]
-                    + corners[7][1])
-                    / 8.0,
-                (corners[0][2]
-                    + corners[1][2]
-                    + corners[2][2]
-                    + corners[3][2]
-                    + corners[4][2]
-                    + corners[5][2]
-                    + corners[6][2]
-                    + corners[7][2])
-                    / 8.0,
-            ];
-
-            // Estimate local coordinates using linear approximation
-            let dx = point[0] - corners[0][0];
-            let dy = point[1] - corners[0][1];
-            let dz = point[2] - corners[0][2];
-
-            let edge_i = [
-                corners[1][0] - corners[0][0],
-                corners[1][1] - corners[0][1],
-                corners[1][2] - corners[0][2],
-            ];
-            let edge_j = [
-                corners[3][0] - corners[0][0],
-                corners[3][1] - corners[0][1],
-                corners[3][2] - corners[0][2],
-            ];
-            let edge_k = [
-                corners[4][0] - corners[0][0],
-                corners[4][1] - corners[0][1],
-                corners[4][2] - corners[0][2],
-            ];
-
-            let len_i = (edge_i[0] * edge_i[0] + edge_i[1] * edge_i[1] + edge_i[2] * edge_i[2])
-                .sqrt()
-                .max(1e-10);
-            let len_j = (edge_j[0] * edge_j[0] + edge_j[1] * edge_j[1] + edge_j[2] * edge_j[2])
-                .sqrt()
-                .max(1e-10);
-            let len_k = (edge_k[0] * edge_k[0] + edge_k[1] * edge_k[1] + edge_k[2] * edge_k[2])
-                .sqrt()
-                .max(1e-10);
-
-            let xi = ((dx * edge_i[0] + dy * edge_i[1] + dz * edge_i[2]) / (len_i * len_i))
-                .clamp(0.0, 1.0);
-            let eta = ((dx * edge_j[0] + dy * edge_j[1] + dz * edge_j[2]) / (len_j * len_j))
-                .clamp(0.0, 1.0);
-            let zeta = ((dx * edge_k[0] + dy * edge_k[1] + dz * edge_k[2]) / (len_k * len_k))
-                .clamp(0.0, 1.0);
-
-            // Trilinear interpolation weights
-            [
-                (1.0 - xi) * (1.0 - eta) * (1.0 - zeta), // corner 0: (0,0,0)
-                xi * (1.0 - eta) * (1.0 - zeta),         // corner 1: (1,0,0)
-                xi * eta * (1.0 - zeta),                 // corner 2: (1,1,0)
-                (1.0 - xi) * eta * (1.0 - zeta),         // corner 3: (0,1,0)
-                (1.0 - xi) * (1.0 - eta) * zeta,         // corner 4: (0,0,1)
-                xi * (1.0 - eta) * zeta,                 // corner 5: (1,0,1)
-                xi * eta * zeta,                         // corner 6: (1,1,1)
-                (1.0 - xi) * eta * zeta,                 // corner 7: (0,1,1)
-            ]
-        };
-
         let mut vertices = Vec::new();
         let mut vertex_cell_data = Vec::new();
         let mut triangle_indices = Vec::new();
 
-        let epsilon = 1e-8;
+        let mut vertex_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
+        let mut line_edges: HashSet<(u32, u32)> = HashSet::new();
+        let mut triangle_set: HashSet<(u32, u32, u32)> = HashSet::new();
+
+        let quantize_key = |p: [f32; 3]| -> (i64, i64, i64) {
+            (
+                (p[0] / epsilon).round() as i64,
+                (p[1] / epsilon).round() as i64,
+                (p[2] / epsilon).round() as i64,
+            )
+        };
+
+        let edges = [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0), // bottom face
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4), // top face
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7), // vertical edges
+        ];
+
+        let add_line_edge = |a: u32, b: u32, line_edges: &mut HashSet<(u32, u32)>| {
+            if a == b {
+                return;
+            }
+            let edge = if a < b { (a, b) } else { (b, a) };
+            line_edges.insert(edge);
+        };
 
         // Process each hexahedral cell
         for k_idx in 0..k - 1 {
@@ -681,94 +479,143 @@ impl Plot3DGrid {
                         continue;
                     }
 
-                    // Find intersection points on cell edges
-                    let edges = [
-                        (0, 1),
-                        (1, 2),
-                        (2, 3),
-                        (3, 0), // bottom face
-                        (4, 5),
-                        (5, 6),
-                        (6, 7),
-                        (7, 4), // top face
-                        (0, 4),
-                        (1, 5),
-                        (2, 6),
-                        (3, 7), // vertical edges
-                    ];
+                    let mut local_points: Vec<[f32; 3]> = Vec::new();
+                    let mut local_weights: Vec<[f32; 8]> = Vec::new();
+                    let mut local_point_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
 
-                    let mut intersection_points: Vec<[f32; 3]> = Vec::new();
-                    let mut point_weights: Vec<[f32; 8]> = Vec::new();
+                    let add_local_point = |point: [f32; 3],
+                                           weights: [f32; 8],
+                                           local_points: &mut Vec<[f32; 3]>,
+                                           local_weights: &mut Vec<[f32; 8]>,
+                                           local_point_map: &mut HashMap<
+                        (i64, i64, i64),
+                        usize,
+                    >| {
+                        let key = quantize_key(point);
+                        if local_point_map.contains_key(&key) {
+                            return;
+                        }
+                        local_point_map.insert(key, local_points.len());
+                        local_points.push(point);
+                        local_weights.push(weights);
+                    };
 
                     for &(c1, c2) in &edges {
                         let d1 = corner_dists[c1];
                         let d2 = corner_dists[c2];
 
-                        // Check if edge crosses plane
-                        if d1 * d2 < 0.0 || d1.abs() < epsilon || d2.abs() < epsilon {
-                            let point: [f32; 3];
-                            let weights: [f32; 8];
-
-                            if d1.abs() < epsilon {
-                                // Corner 1 is on the plane
-                                point = corners[c1];
-                                weights = {
-                                    let mut w = [0.0; 8];
-                                    w[c1] = 1.0;
-                                    w
-                                };
-                            } else if d2.abs() < epsilon {
-                                // Corner 2 is on the plane
-                                point = corners[c2];
-                                weights = {
-                                    let mut w = [0.0; 8];
-                                    w[c2] = 1.0;
-                                    w
-                                };
-                            } else if d1 * d2 < 0.0 {
-                                // Edge crosses plane - interpolate
-                                let t = d1.abs() / (d1.abs() + d2.abs());
-                                point = [
-                                    corners[c1][0] + t * (corners[c2][0] - corners[c1][0]),
-                                    corners[c1][1] + t * (corners[c2][1] - corners[c1][1]),
-                                    corners[c1][2] + t * (corners[c2][2] - corners[c1][2]),
-                                ];
-                                // Linear interpolation on edge
-                                weights = {
-                                    let mut w = [0.0; 8];
-                                    w[c1] = 1.0 - t;
-                                    w[c2] = t;
-                                    w
-                                };
-                            } else {
-                                continue;
-                            }
-
-                            // Check if we already have this point
-                            let mut found = false;
-                            for existing in &intersection_points {
-                                if (point[0] - existing[0]).abs() < epsilon
-                                    && (point[1] - existing[1]).abs() < epsilon
-                                    && (point[2] - existing[2]).abs() < epsilon
-                                {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                intersection_points.push(point);
-                                point_weights.push(weights);
-                            }
+                        if d1.abs() <= epsilon && d2.abs() <= epsilon {
+                            let mut w1 = [0.0; 8];
+                            let mut w2 = [0.0; 8];
+                            w1[c1] = 1.0;
+                            w2[c2] = 1.0;
+                            add_local_point(
+                                corners[c1],
+                                w1,
+                                &mut local_points,
+                                &mut local_weights,
+                                &mut local_point_map,
+                            );
+                            add_local_point(
+                                corners[c2],
+                                w2,
+                                &mut local_points,
+                                &mut local_weights,
+                                &mut local_point_map,
+                            );
+                        } else if d1.abs() <= epsilon {
+                            let mut w = [0.0; 8];
+                            w[c1] = 1.0;
+                            add_local_point(
+                                corners[c1],
+                                w,
+                                &mut local_points,
+                                &mut local_weights,
+                                &mut local_point_map,
+                            );
+                        } else if d2.abs() <= epsilon {
+                            let mut w = [0.0; 8];
+                            w[c2] = 1.0;
+                            add_local_point(
+                                corners[c2],
+                                w,
+                                &mut local_points,
+                                &mut local_weights,
+                                &mut local_point_map,
+                            );
+                        } else if d1 * d2 < 0.0 {
+                            let t = d1.abs() / (d1.abs() + d2.abs());
+                            let point = [
+                                corners[c1][0] + t * (corners[c2][0] - corners[c1][0]),
+                                corners[c1][1] + t * (corners[c2][1] - corners[c1][1]),
+                                corners[c1][2] + t * (corners[c2][2] - corners[c1][2]),
+                            ];
+                            let mut w = [0.0; 8];
+                            w[c1] = 1.0 - t;
+                            w[c2] = t;
+                            add_local_point(
+                                point,
+                                w,
+                                &mut local_points,
+                                &mut local_weights,
+                                &mut local_point_map,
+                            );
                         }
                     }
 
-                    // Create triangulated polygon from intersection points
-                    if intersection_points.len() >= 3 {
-                        let base_vertex_idx = vertices.len() / 3;
+                    if local_points.len() < 3 {
+                        continue;
+                    }
 
-                        // Add all intersection points
-                        for (point, weights) in intersection_points.iter().zip(point_weights.iter())
-                        {
+                    let mut centroid = [0.0f32, 0.0f32, 0.0f32];
+                    for point in &local_points {
+                        centroid[0] += point[0];
+                        centroid[1] += point[1];
+                        centroid[2] += point[2];
+                    }
+                    let inv_n = 1.0 / (local_points.len() as f32);
+                    centroid[0] *= inv_n;
+                    centroid[1] *= inv_n;
+                    centroid[2] *= inv_n;
+
+                    let mut order: Vec<usize> = (0..local_points.len()).collect();
+                    order.sort_by(|&a, &b| {
+                        let da = sub(local_points[a], centroid);
+                        let db = sub(local_points[b], centroid);
+                        let angle_a = dot(da, v).atan2(dot(da, u));
+                        let angle_b = dot(db, v).atan2(dot(db, u));
+                        angle_a
+                            .partial_cmp(&angle_b)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                    let mut signed_area = 0.0f32;
+                    for idx in 0..order.len() {
+                        let pa = local_points[order[idx]];
+                        let pb = local_points[order[(idx + 1) % order.len()]];
+                        let a_u = dot(sub(pa, centroid), u);
+                        let a_v = dot(sub(pa, centroid), v);
+                        let b_u = dot(sub(pb, centroid), u);
+                        let b_v = dot(sub(pb, centroid), v);
+                        signed_area += a_u * b_v - b_u * a_v;
+                    }
+
+                    if signed_area.abs() <= epsilon * epsilon {
+                        continue;
+                    }
+
+                    if signed_area < 0.0 {
+                        order.reverse();
+                    }
+
+                    let mut ordered_global: Vec<u32> = Vec::with_capacity(order.len());
+                    for &local_idx in &order {
+                        let point = local_points[local_idx];
+                        let key = quantize_key(point);
+                        let global_idx = if let Some(&idx) = vertex_map.get(&key) {
+                            idx
+                        } else {
+                            let idx = vertices.len() / 3;
                             vertices.push(point[0]);
                             vertices.push(point[1]);
                             vertices.push(point[2]);
@@ -776,22 +623,79 @@ impl Plot3DGrid {
                                 cell_i: i_idx,
                                 cell_j: j_idx,
                                 cell_k: k_idx,
-                                weights: *weights,
+                                weights: local_weights[local_idx],
                             });
-                        }
+                            vertex_map.insert(key, idx);
+                            idx
+                        };
+                        ordered_global.push(global_idx as u32);
+                    }
 
-                        // Simple fan triangulation from first vertex
-                        for idx in 1..intersection_points.len() - 1 {
-                            triangle_indices.push(base_vertex_idx as u32);
-                            triangle_indices.push((base_vertex_idx + idx) as u32);
-                            triangle_indices.push((base_vertex_idx + idx + 1) as u32);
+                    if ordered_global.len() >= 3 {
+                        for tri_idx in 1..ordered_global.len() - 1 {
+                            let a = ordered_global[0];
+                            let b = ordered_global[tri_idx];
+                            let c = ordered_global[tri_idx + 1];
+
+                            if a == b || b == c || a == c {
+                                continue;
+                            }
+
+                            let pa = [
+                                vertices[(a as usize) * 3],
+                                vertices[(a as usize) * 3 + 1],
+                                vertices[(a as usize) * 3 + 2],
+                            ];
+                            let pb = [
+                                vertices[(b as usize) * 3],
+                                vertices[(b as usize) * 3 + 1],
+                                vertices[(b as usize) * 3 + 2],
+                            ];
+                            let pc = [
+                                vertices[(c as usize) * 3],
+                                vertices[(c as usize) * 3 + 1],
+                                vertices[(c as usize) * 3 + 2],
+                            ];
+
+                            let tri_normal = cross(sub(pb, pa), sub(pc, pa));
+                            let tri_area_mag = (tri_normal[0] * tri_normal[0]
+                                + tri_normal[1] * tri_normal[1]
+                                + tri_normal[2] * tri_normal[2])
+                                .sqrt();
+                            if tri_area_mag <= epsilon * epsilon {
+                                continue;
+                            }
+
+                            if dot(tri_normal, n) < 0.0 {
+                                let mut key = [a, c, b];
+                                key.sort_unstable();
+                                if triangle_set.insert((key[0], key[1], key[2])) {
+                                    triangle_indices.push(a);
+                                    triangle_indices.push(c);
+                                    triangle_indices.push(b);
+                                    add_line_edge(a, c, &mut line_edges);
+                                    add_line_edge(c, b, &mut line_edges);
+                                    add_line_edge(b, a, &mut line_edges);
+                                }
+                            } else {
+                                let mut key = [a, b, c];
+                                key.sort_unstable();
+                                if triangle_set.insert((key[0], key[1], key[2])) {
+                                    triangle_indices.push(a);
+                                    triangle_indices.push(b);
+                                    triangle_indices.push(c);
+                                    add_line_edge(a, b, &mut line_edges);
+                                    add_line_edge(b, c, &mut line_edges);
+                                    add_line_edge(c, a, &mut line_edges);
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        if vertices.is_empty() {
+        if triangle_indices.is_empty() {
             return Err("No intersection found between plane and grid".to_string());
         }
 
@@ -804,18 +708,10 @@ impl Plot3DGrid {
             normals.push(n[2]);
         }
 
-        // Generate line indices from triangles for wireframe
-        let mut line_indices = Vec::new();
-        for tri_idx in (0..triangle_indices.len()).step_by(3) {
-            let v0 = triangle_indices[tri_idx];
-            let v1 = triangle_indices[tri_idx + 1];
-            let v2 = triangle_indices[tri_idx + 2];
-            line_indices.push(v0);
-            line_indices.push(v1);
-            line_indices.push(v1);
-            line_indices.push(v2);
-            line_indices.push(v2);
-            line_indices.push(v0);
+        let mut line_indices = Vec::with_capacity(line_edges.len() * 2);
+        for (a, b) in line_edges {
+            line_indices.push(a);
+            line_indices.push(b);
         }
 
         Ok(MeshGeometry {
@@ -2616,6 +2512,98 @@ mod tests {
         for i in (0..mesh.vertices.len()).step_by(3) {
             let z = mesh.vertices[i + 2];
             assert!((z - 0.0).abs() < 0.01, "Vertex z {} should be near 0.0", z);
+        }
+    }
+
+    #[test]
+    fn test_arbitrary_plane_consistent_winding() {
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords: vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            y_coords: vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+            z_coords: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            iblank: None,
+        };
+
+        let plane_point = [0.0, 0.0, 0.5];
+        let plane_normal = [0.0, 0.0, 1.0];
+        let mesh = grid
+            .slice_arbitrary_plane(plane_point, plane_normal, false)
+            .expect("Expected arbitrary plane intersection");
+
+        assert_eq!(mesh.triangle_indices.len() % 3, 0);
+        assert!(mesh.triangle_indices.len() >= 3);
+
+        for tri in mesh.triangle_indices.chunks_exact(3) {
+            let ia = tri[0] as usize;
+            let ib = tri[1] as usize;
+            let ic = tri[2] as usize;
+
+            let a = [
+                mesh.vertices[ia * 3],
+                mesh.vertices[ia * 3 + 1],
+                mesh.vertices[ia * 3 + 2],
+            ];
+            let b = [
+                mesh.vertices[ib * 3],
+                mesh.vertices[ib * 3 + 1],
+                mesh.vertices[ib * 3 + 2],
+            ];
+            let c = [
+                mesh.vertices[ic * 3],
+                mesh.vertices[ic * 3 + 1],
+                mesh.vertices[ic * 3 + 2],
+            ];
+
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let tri_normal = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+
+            let dot = tri_normal[2];
+            assert!(dot >= -1e-5, "Triangle winding flipped: dot={dot}");
+        }
+    }
+
+    #[test]
+    fn test_arbitrary_plane_welds_adjacent_cell_face() {
+        // 3x2x2 grid -> two cells along I direction sharing interior face at x=1
+        let mut x_coords = Vec::new();
+        let mut y_coords = Vec::new();
+        let mut z_coords = Vec::new();
+
+        for k in 0..2 {
+            for j in 0..2 {
+                for i in 0..3 {
+                    x_coords.push(i as f32);
+                    y_coords.push(j as f32);
+                    z_coords.push(k as f32);
+                }
+            }
+        }
+
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 2, k: 2 },
+            x_coords,
+            y_coords,
+            z_coords,
+            iblank: None,
+        };
+
+        let plane_point = [1.0, 0.0, 0.0];
+        let plane_normal = [1.0, 0.0, 0.0];
+
+        let mesh = grid
+            .slice_arbitrary_plane(plane_point, plane_normal, false)
+            .expect("Expected intersection at interior shared face");
+
+        assert_eq!(mesh.vertex_count, 4, "Expected welded quad vertices");
+        assert_eq!(mesh.triangle_indices.len(), 6, "Expected two triangles");
+        for i in (0..mesh.vertices.len()).step_by(3) {
+            assert!((mesh.vertices[i] - 1.0).abs() < 1e-5);
         }
     }
     use super::*;

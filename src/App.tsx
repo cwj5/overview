@@ -415,39 +415,59 @@ const App = () => {
             // Use v2 API to load and cache solutions
             const solutionMetadata = await invoke<SolutionMetadata[]>("load_plot3d_solution_cached", { path: solPath });
 
-            // Validate solution matches grids
-            if (solutionMetadata.length !== allGrids.length) {
-              throw new Error(
-                `Solution file has ${solutionMetadata.length} grid(s) but grid file has ${allGrids.length} grid(s). They must match.`
-              );
-            }
+            const getStem = (nameOrPath: string) =>
+              nameOrPath
+                .split(/[/\\]/)
+                .pop()
+                ?.replace(/\.[^/.]+$/, '')
+                .toLowerCase() ?? '';
+            const solutionStem = getStem(solPath);
+            const multipleGridFilesLoaded = new Set(allGrids.map((g) => g.filePath)).size > 1;
+
+            // Build a deterministic mapping from solution metadata -> grid item ID
+            const solutionToGrid = new Map<string, string>();
+            const assignedGridIds = new Set<string>();
 
             // Validate dimensions for each grid
-            for (let i = 0; i < solutionMetadata.length; i++) {
-              const solMeta = solutionMetadata[i];
-              const gridItem = allGrids.find((g) => g.gridIndex === solMeta.grid_index);
+            for (const solMeta of solutionMetadata) {
+              const candidates = allGrids.filter((g) => {
+                if (g.gridIndex !== solMeta.grid_index) {
+                  return false;
+                }
+
+                if (
+                  solMeta.dimensions.i !== g.dimensions.i ||
+                  solMeta.dimensions.j !== g.dimensions.j ||
+                  solMeta.dimensions.k !== g.dimensions.k
+                ) {
+                  return false;
+                }
+
+                if (!multipleGridFilesLoaded) {
+                  return true;
+                }
+
+                return getStem(g.fileName) === solutionStem;
+              });
+
+              const gridItem = candidates.find((candidate) => !assignedGridIds.has(candidate.id));
 
               if (!gridItem) {
-                throw new Error(`Solution grid ${solMeta.grid_index + 1} not found in loaded grids`);
-              }
-
-              if (
-                solMeta.dimensions.i !== gridItem.dimensions.i ||
-                solMeta.dimensions.j !== gridItem.dimensions.j ||
-                solMeta.dimensions.k !== gridItem.dimensions.k
-              ) {
                 throw new Error(
-                  `Grid ${solMeta.grid_index + 1} dimensions mismatch: solution has ${solMeta.dimensions.i}x${solMeta.dimensions.j}x${solMeta.dimensions.k} but grid has ${gridItem.dimensions.i}x${gridItem.dimensions.j}x${gridItem.dimensions.k}`
+                  `Unable to match solution grid ${solMeta.grid_index + 1} (${solMeta.dimensions.i}x${solMeta.dimensions.j}x${solMeta.dimensions.k}) to a loaded grid.`
                 );
               }
+
+              assignedGridIds.add(gridItem.id);
+              solutionToGrid.set(solMeta.id, gridItem.id);
             }
 
             // Match solution IDs to grids
             setGrids((prevGrids) =>
               prevGrids.map((gridItem) => {
-                const solMeta = solutionMetadata.find((sol) => sol.grid_index === gridItem.gridIndex);
-                if (solMeta) {
-                  return { ...gridItem, solutionCacheId: solMeta.id, hasSolution: true };
+                const matchedSol = solutionMetadata.find((sol) => solutionToGrid.get(sol.id) === gridItem.id);
+                if (matchedSol) {
+                  return { ...gridItem, solutionCacheId: matchedSol.id, hasSolution: true };
                 }
                 return gridItem;
               })

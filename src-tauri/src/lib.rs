@@ -844,26 +844,41 @@ fn compute_solution_colors(
     let _ = window.emit("loading-start", format!("Computing {} field...", field));
 
     // Load grid from cache
-    let grid = {
+    let (grid, grid_file_path, grid_index) = {
         let cache = GRID_CACHE
             .lock()
             .map_err(|_| "Grid cache lock poisoned".to_string())?;
         let cached = cache
             .get(&gridId)
             .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
-        Arc::clone(&cached.grid)
+        (
+            Arc::clone(&cached.grid),
+            cached.file_path.clone(),
+            cached.grid_index,
+        )
     };
 
     // Load solution from cache
-    let solution = {
+    let (solution, solution_file_path, solution_grid_index) = {
         let cache = SOLUTION_CACHE_V2
             .lock()
             .map_err(|_| "Solution cache lock poisoned".to_string())?;
         let cached = cache
             .get(&solutionId)
             .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
-        Arc::clone(&cached.solution)
+        (
+            Arc::clone(&cached.solution),
+            cached.file_path.clone(),
+            cached.grid_index,
+        )
     };
+
+    if grid_file_path != solution_file_path || grid_index != solution_grid_index {
+        return Err(format!(
+            "Grid/solution mismatch: grid(id={}, file={}, index={}) vs solution(id={}, file={}, index={})",
+            gridId, grid_file_path, grid_index, solutionId, solution_file_path, solution_grid_index
+        ));
+    }
 
     // Parse field and scheme
     let field_enum =
@@ -937,26 +952,41 @@ fn compute_solution_colors_sliced(
     );
 
     // Load grid from cache
-    let original_grid = {
+    let (original_grid, grid_file_path, grid_index) = {
         let cache = GRID_CACHE
             .lock()
             .map_err(|_| "Grid cache lock poisoned".to_string())?;
         let cached = cache
             .get(&gridId)
             .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
-        Arc::clone(&cached.grid)
+        (
+            Arc::clone(&cached.grid),
+            cached.file_path.clone(),
+            cached.grid_index,
+        )
     };
 
     // Load solution from cache
-    let solution = {
+    let (solution, solution_file_path, solution_grid_index) = {
         let cache = SOLUTION_CACHE_V2
             .lock()
             .map_err(|_| "Solution cache lock poisoned".to_string())?;
         let cached = cache
             .get(&solutionId)
             .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
-        Arc::clone(&cached.solution)
+        (
+            Arc::clone(&cached.solution),
+            cached.file_path.clone(),
+            cached.grid_index,
+        )
     };
+
+    if grid_file_path != solution_file_path || grid_index != solution_grid_index {
+        return Err(format!(
+            "Grid/solution mismatch: grid(id={}, file={}, index={}) vs solution(id={}, file={}, index={})",
+            gridId, grid_file_path, grid_index, solutionId, solution_file_path, solution_grid_index
+        ));
+    }
 
     // Parse field and scheme
     let field_enum =
@@ -1075,26 +1105,41 @@ fn compute_solution_colors_arbitrary_plane(
     );
 
     // Load grid from cache
-    let grid = {
+    let (grid, grid_file_path, grid_index) = {
         let cache = GRID_CACHE
             .lock()
             .map_err(|_| "Grid cache lock poisoned".to_string())?;
         let cached = cache
             .get(&gridId)
             .ok_or_else(|| format!("Grid not found in cache: {}", gridId))?;
-        Arc::clone(&cached.grid)
+        (
+            Arc::clone(&cached.grid),
+            cached.file_path.clone(),
+            cached.grid_index,
+        )
     };
 
     // Load solution from cache
-    let solution = {
+    let (solution, solution_file_path, solution_grid_index) = {
         let cache = SOLUTION_CACHE_V2
             .lock()
             .map_err(|_| "Solution cache lock poisoned".to_string())?;
         let cached = cache
             .get(&solutionId)
             .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
-        Arc::clone(&cached.solution)
+        (
+            Arc::clone(&cached.solution),
+            cached.file_path.clone(),
+            cached.grid_index,
+        )
     };
+
+    if grid_file_path != solution_file_path || grid_index != solution_grid_index {
+        return Err(format!(
+            "Grid/solution mismatch: grid(id={}, file={}, index={}) vs solution(id={}, file={}, index={})",
+            gridId, grid_file_path, grid_index, solutionId, solution_file_path, solution_grid_index
+        ));
+    }
 
     // Parse field and scheme
     let field_enum =

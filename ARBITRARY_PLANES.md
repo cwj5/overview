@@ -43,12 +43,15 @@ The normal vector is automatically normalized, so you can use any non-zero value
 ## Technical Details
 
 ### Algorithm
-The implementation uses a triangle-based intersection algorithm:
-1. Each hexahedral cell in the structured grid is split into triangles (each face is split consistently into two triangles)
-2. Each triangle is tested for intersection with the plane, including cases where triangle vertices or edges are exactly on the plane
-3. Intersection points are computed using linear interpolation, and exact matches are handled robustly
-4. Segments are formed for each intersected triangle, ensuring all aligned faces and edges are properly registered
-5. The resulting segments are triangulated to form a solid surface mesh
+The implementation now uses a welded polygon reconstruction algorithm:
+1. Each hexahedral cell is intersected with the plane using all 12 cell edges, including coplanar edge/vertex handling
+2. Intersection points in each cell are deduplicated and ordered in the plane basis (2D angle sort)
+3. Cell polygons are triangulated with consistent orientation against the plane normal
+4. Vertices are globally welded across all intersected cells in a grid using a scale-aware tolerance
+5. Duplicate coplanar triangles are removed to avoid overlapping internal faces
+6. The final result is a per-grid triangulated surface mesh with consistent winding and no seam cracks at shared cell boundaries
+
+Important: slicing is computed independently for each grid. If multiple grids are loaded, the result is multiple unconnected surfaces (one per grid), and no geometry is stitched between grids.
 
 ### Solution Field Interpolation
 For solution field visualization on arbitrary planes:
@@ -65,12 +68,16 @@ For solution field visualization on arbitrary planes:
 
 ### Current Features
 - **Solution field coloring**: Arbitrary planes now support density/pressure/velocity/energy field visualization with interpolated colors
-- **Triangulated surface**: The plane intersection creates a proper triangulated mesh for solid rendering
+- **Triangulated surface**: The plane intersection creates a welded triangulated mesh for solid rendering
 - **Interpolation tracking**: Each vertex on the plane tracks its position within the source hexahedral cell for accurate solution value interpolation
+- **Per-grid separation**: Outputs remain disconnected between different grids by design
+- **Consistent winding**: Triangle winding is aligned to the selected plane normal for stable shading
+- **Coplanar support**: Faces/edges/vertices that lie on the plane are included in the intersection
 
 ### Limitations (Current Version)
 - **Manual input only**: No interactive drag handles or rotation widgets (planned for future)
 - **No caching**: Plane is recomputed on every parameter change
+- **Tolerance-dependent welding**: Very ill-conditioned grids can still be sensitive to floating-point tolerance selection
 
 ## Troubleshooting
 
