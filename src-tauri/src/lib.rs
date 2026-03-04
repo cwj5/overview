@@ -691,6 +691,51 @@ fn compute_scalar_field_value(solution: &Plot3DSolution, field: solution::Scalar
     }
 }
 
+/// Compute scalar field value directly from conservative variables at a point
+fn compute_scalar_field_from_components(
+    rho: f32,
+    rhou: f32,
+    rhov: f32,
+    rhow: f32,
+    rhoe: f32,
+    gamma: Option<f32>,
+    field: solution::ScalarField,
+) -> f32 {
+    use solution::ScalarField;
+
+    match field {
+        ScalarField::Density => rho,
+        ScalarField::VelocityMagnitude => {
+            if rho > 0.0 {
+                let u = rhou / rho;
+                let v = rhov / rho;
+                let w = rhow / rho;
+                (u * u + v * v + w * w).sqrt()
+            } else {
+                0.0
+            }
+        }
+        ScalarField::MomentumX => rhou,
+        ScalarField::MomentumY => rhov,
+        ScalarField::MomentumZ => rhow,
+        ScalarField::Pressure => {
+            const DEFAULT_GAMMA: f32 = 1.4;
+            if rho > 0.0 {
+                let gamma = gamma.unwrap_or(DEFAULT_GAMMA);
+                let u = rhou / rho;
+                let v = rhov / rho;
+                let w = rhow / rho;
+                let kinetic_energy = 0.5 * rho * (u * u + v * v + w * w);
+                let internal_energy = rhoe - kinetic_energy;
+                (gamma - 1.0) * internal_energy
+            } else {
+                0.0
+            }
+        }
+        ScalarField::Energy => rhoe,
+    }
+}
+
 // ============================================================================
 // NEW: ID-Based Compute Commands (Phase 2)
 // ============================================================================
@@ -873,10 +918,34 @@ fn compute_solution_colors(
         )
     };
 
-    if grid_file_path != solution_file_path || grid_index != solution_grid_index {
+    if grid_index != solution_grid_index {
         return Err(format!(
-            "Grid/solution mismatch: grid(id={}, file={}, index={}) vs solution(id={}, file={}, index={})",
-            gridId, grid_file_path, grid_index, solutionId, solution_file_path, solution_grid_index
+            "Grid/solution mismatch: grid/solution index differs: grid(id={}, index={}) vs solution(id={}, index={})",
+            gridId, grid_index, solutionId, solution_grid_index
+        ));
+    }
+
+    if grid.dimensions.i != solution.dimensions.i
+        || grid.dimensions.j != solution.dimensions.j
+        || grid.dimensions.k != solution.dimensions.k
+    {
+        return Err(format!(
+            "Grid/solution mismatch: dimensions differ: grid(id={}, dims={}x{}x{}) vs solution(id={}, dims={}x{}x{})",
+            gridId,
+            grid.dimensions.i,
+            grid.dimensions.j,
+            grid.dimensions.k,
+            solutionId,
+            solution.dimensions.i,
+            solution.dimensions.j,
+            solution.dimensions.k
+        ));
+    }
+
+    if grid_file_path != solution_file_path {
+        log_debug(&format!(
+            "Grid/solution file paths differ but pair accepted by index+dimensions: grid(id={}, file={}) solution(id={}, file={})",
+            gridId, grid_file_path, solutionId, solution_file_path
         ));
     }
 
@@ -981,10 +1050,34 @@ fn compute_solution_colors_sliced(
         )
     };
 
-    if grid_file_path != solution_file_path || grid_index != solution_grid_index {
+    if grid_index != solution_grid_index {
         return Err(format!(
-            "Grid/solution mismatch: grid(id={}, file={}, index={}) vs solution(id={}, file={}, index={})",
-            gridId, grid_file_path, grid_index, solutionId, solution_file_path, solution_grid_index
+            "Grid/solution mismatch: grid/solution index differs: grid(id={}, index={}) vs solution(id={}, index={})",
+            gridId, grid_index, solutionId, solution_grid_index
+        ));
+    }
+
+    if original_grid.dimensions.i != solution.dimensions.i
+        || original_grid.dimensions.j != solution.dimensions.j
+        || original_grid.dimensions.k != solution.dimensions.k
+    {
+        return Err(format!(
+            "Grid/solution mismatch: dimensions differ: grid(id={}, dims={}x{}x{}) vs solution(id={}, dims={}x{}x{})",
+            gridId,
+            original_grid.dimensions.i,
+            original_grid.dimensions.j,
+            original_grid.dimensions.k,
+            solutionId,
+            solution.dimensions.i,
+            solution.dimensions.j,
+            solution.dimensions.k
+        ));
+    }
+
+    if grid_file_path != solution_file_path {
+        log_debug(&format!(
+            "Grid/solution file paths differ but pair accepted by index+dimensions: grid(id={}, file={}) solution(id={}, file={})",
+            gridId, grid_file_path, solutionId, solution_file_path
         ));
     }
 
@@ -1134,10 +1227,34 @@ fn compute_solution_colors_arbitrary_plane(
         )
     };
 
-    if grid_file_path != solution_file_path || grid_index != solution_grid_index {
+    if grid_index != solution_grid_index {
         return Err(format!(
-            "Grid/solution mismatch: grid(id={}, file={}, index={}) vs solution(id={}, file={}, index={})",
-            gridId, grid_file_path, grid_index, solutionId, solution_file_path, solution_grid_index
+            "Grid/solution mismatch: grid/solution index differs: grid(id={}, index={}) vs solution(id={}, index={})",
+            gridId, grid_index, solutionId, solution_grid_index
+        ));
+    }
+
+    if grid.dimensions.i != solution.dimensions.i
+        || grid.dimensions.j != solution.dimensions.j
+        || grid.dimensions.k != solution.dimensions.k
+    {
+        return Err(format!(
+            "Grid/solution mismatch: dimensions differ: grid(id={}, dims={}x{}x{}) vs solution(id={}, dims={}x{}x{})",
+            gridId,
+            grid.dimensions.i,
+            grid.dimensions.j,
+            grid.dimensions.k,
+            solutionId,
+            solution.dimensions.i,
+            solution.dimensions.j,
+            solution.dimensions.k
+        ));
+    }
+
+    if grid_file_path != solution_file_path {
+        log_debug(&format!(
+            "Grid/solution file paths differ but pair accepted by index+dimensions: grid(id={}, file={}) solution(id={}, file={})",
+            gridId, grid_file_path, solutionId, solution_file_path
         ));
     }
 
@@ -1169,7 +1286,24 @@ fn compute_solution_colors_arbitrary_plane(
         .as_ref()
         .ok_or_else(|| "No vertex cell data available".to_string())?;
 
-    // Interpolate solution values (same as existing command)
+    // Precompute scalar field at original grid nodes, then interpolate scalar values
+    // to arbitrary-plane vertices using the stored corner weights.
+    // This directly interpolates the selected field data onto the plane.
+    let nodal_field_values: Vec<f32> = (0..grid_points)
+        .map(|idx| {
+            let gamma = solution.gamma.as_ref().map(|g| g[idx]);
+            compute_scalar_field_from_components(
+                solution.rho[idx],
+                solution.rhou[idx],
+                solution.rhov[idx],
+                solution.rhow[idx],
+                solution.rhoe[idx],
+                gamma,
+                field_enum,
+            )
+        })
+        .collect();
+
     let i_orig = grid.dimensions.i as usize;
     let j_orig = grid.dimensions.j as usize;
     let linear_index =
@@ -1193,38 +1327,14 @@ fn compute_solution_colors_arbitrary_plane(
             linear_index(i, j + 1, k + 1),
         ];
 
-        let mut rho = 0.0;
-        let mut rhou = 0.0;
-        let mut rhov = 0.0;
-        let mut rhow = 0.0;
-        let mut rhoe = 0.0;
-        let mut gamma_val = 0.0;
+        let mut interpolated_field = 0.0;
 
         for (idx, &corner_idx) in corner_indices.iter().enumerate() {
             let weight = cell_data.weights[idx];
-            rho += weight * solution.rho[corner_idx];
-            rhou += weight * solution.rhou[corner_idx];
-            rhov += weight * solution.rhov[corner_idx];
-            rhow += weight * solution.rhow[corner_idx];
-            rhoe += weight * solution.rhoe[corner_idx];
-            if let Some(ref gamma_arr) = solution.gamma {
-                gamma_val += weight * gamma_arr[corner_idx];
-            }
+            interpolated_field += weight * nodal_field_values[corner_idx];
         }
 
-        let point_solution = Plot3DSolution {
-            grid_index: 0,
-            dimensions: GridDimensions { i: 1, j: 1, k: 1 },
-            rho: vec![rho],
-            rhou: vec![rhou],
-            rhov: vec![rhov],
-            rhow: vec![rhow],
-            rhoe: vec![rhoe],
-            gamma: solution.gamma.as_ref().map(|_| vec![gamma_val]),
-            metadata: None,
-        };
-
-        values.push(compute_scalar_field_value(&point_solution, field_enum));
+        values.push(interpolated_field);
     }
 
     let colors = compute_colors(&values, &scheme);
