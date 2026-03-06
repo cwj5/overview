@@ -290,12 +290,13 @@ impl Plot3DGrid {
         plane_point: [f32; 3],
         plane_normal: [f32; 3],
         respect_iblank: bool,
+        show_fringe_points: bool,
     ) -> Result<MeshGeometry, String> {
         let mut mesh = self.slice_arbitrary_plane_with_solution(
             plane_point,
             plane_normal,
             respect_iblank,
-            true,
+            show_fringe_points,
         )?;
         mesh.vertex_cell_data = None;
         Ok(mesh)
@@ -525,40 +526,48 @@ impl Plot3DGrid {
                             let mut w2 = [0.0; 8];
                             w1[c1] = 1.0;
                             w2[c2] = 1.0;
-                            add_local_point(
-                                corners[c1],
-                                w1,
-                                &mut local_points,
-                                &mut local_weights,
-                                &mut local_point_map,
-                            );
-                            add_local_point(
-                                corners[c2],
-                                w2,
-                                &mut local_points,
-                                &mut local_weights,
-                                &mut local_point_map,
-                            );
+                            if !corner_blanked[c1] {
+                                add_local_point(
+                                    corners[c1],
+                                    w1,
+                                    &mut local_points,
+                                    &mut local_weights,
+                                    &mut local_point_map,
+                                );
+                            }
+                            if !corner_blanked[c2] {
+                                add_local_point(
+                                    corners[c2],
+                                    w2,
+                                    &mut local_points,
+                                    &mut local_weights,
+                                    &mut local_point_map,
+                                );
+                            }
                         } else if d1.abs() <= epsilon {
                             let mut w = [0.0; 8];
                             w[c1] = 1.0;
-                            add_local_point(
-                                corners[c1],
-                                w,
-                                &mut local_points,
-                                &mut local_weights,
-                                &mut local_point_map,
-                            );
+                            if !corner_blanked[c1] {
+                                add_local_point(
+                                    corners[c1],
+                                    w,
+                                    &mut local_points,
+                                    &mut local_weights,
+                                    &mut local_point_map,
+                                );
+                            }
                         } else if d2.abs() <= epsilon {
                             let mut w = [0.0; 8];
                             w[c2] = 1.0;
-                            add_local_point(
-                                corners[c2],
-                                w,
-                                &mut local_points,
-                                &mut local_weights,
-                                &mut local_point_map,
-                            );
+                            if !corner_blanked[c2] {
+                                add_local_point(
+                                    corners[c2],
+                                    w,
+                                    &mut local_points,
+                                    &mut local_weights,
+                                    &mut local_point_map,
+                                );
+                            }
                         } else if d1 * d2 < 0.0 {
                             let t = d1.abs() / (d1.abs() + d2.abs());
                             let point = [
@@ -2490,7 +2499,7 @@ mod tests {
         // Plane exactly at z=0 (bottom face)
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [0.0, 0.0, 1.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(result.is_ok(), "Should intersect aligned face");
         let mesh = result.unwrap();
         assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
@@ -2515,7 +2524,7 @@ mod tests {
         // Plane along x=0 edge
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [1.0, 0.0, 0.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(result.is_ok(), "Should intersect aligned edge");
         let mesh = result.unwrap();
         assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
@@ -2540,7 +2549,7 @@ mod tests {
         // Plane at z=0 (bottom face), should produce duplicate points at corners
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [0.0, 0.0, 1.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(result.is_ok(), "Should intersect aligned face");
         let mesh = result.unwrap();
         // Check that duplicate points are not present (all points are unique)
@@ -2565,7 +2574,7 @@ mod tests {
         let plane_point = [0.0, 0.0, 0.5];
         let plane_normal = [0.0, 0.0, 1.0];
         let mesh = grid
-            .slice_arbitrary_plane(plane_point, plane_normal, false)
+            .slice_arbitrary_plane(plane_point, plane_normal, false, false)
             .expect("Expected arbitrary plane intersection");
 
         assert_eq!(mesh.triangle_indices.len() % 3, 0);
@@ -2634,7 +2643,7 @@ mod tests {
         let plane_normal = [1.0, 0.0, 0.0];
 
         let mesh = grid
-            .slice_arbitrary_plane(plane_point, plane_normal, false)
+            .slice_arbitrary_plane(plane_point, plane_normal, false, false)
             .expect("Expected intersection at interior shared face");
 
         assert_eq!(mesh.vertex_count, 4, "Expected welded quad vertices");
@@ -3757,7 +3766,7 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [0.0, 0.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(result.is_ok(), "Failed to slice grid: {:?}", result.err());
 
         let mesh = result.unwrap();
@@ -3806,7 +3815,7 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [1.0, 1.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(
             result.is_ok(),
             "Failed to slice diagonal plane: {:?}",
@@ -3855,7 +3864,7 @@ mod tests {
         let plane_point = [10.0, 10.0, 10.0];
         let plane_normal = [0.0, 0.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(
             result.is_err(),
             "Should fail when plane doesn't intersect grid"
@@ -3876,7 +3885,7 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [0.0, 0.0, 0.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false);
+        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
         assert!(result.is_err(), "Should fail with zero normal vector");
     }
 

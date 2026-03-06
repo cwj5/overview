@@ -844,7 +844,7 @@ fn slice_arbitrary_plane_by_id(
     planePoint: [f32; 3],
     planeNormal: [f32; 3],
     respect_iblank: Option<bool>,
-    _show_fringe_points: Option<bool>,
+    show_fringe_points: Option<bool>,
     _window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     log_debug(&format!(
@@ -863,8 +863,12 @@ fn slice_arbitrary_plane_by_id(
         Arc::clone(&cached.grid)
     };
 
-    let result =
-        grid.slice_arbitrary_plane(planePoint, planeNormal, respect_iblank.unwrap_or(false));
+    let result = grid.slice_arbitrary_plane(
+        planePoint,
+        planeNormal,
+        respect_iblank.unwrap_or(false),
+        show_fringe_points.unwrap_or(true),
+    );
 
     match &result {
         Ok(mesh) => {
@@ -1059,9 +1063,11 @@ fn compute_solution_colors_sliced(
     colorScheme: String,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    global_min: Option<f32>,
+    global_max: Option<f32>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, ColorScheme, ScalarField};
+    use solution::{compute_colors_with_range, ColorScheme, ScalarField};
 
     let _ = window.emit(
         "loading-start",
@@ -1199,7 +1205,58 @@ fn compute_solution_colors_sliced(
         }
     }
 
-    let colors = compute_colors(&values, &scheme);
+    // Log displayed range (values on this shown slice) and normalization range
+    let mut shown_min: Option<f32> = None;
+    let mut shown_max: Option<f32> = None;
+    for &v in values.iter() {
+        if !v.is_finite() {
+            continue;
+        }
+        shown_min = Some(match shown_min {
+            Some(current) => current.min(v),
+            None => v,
+        });
+        shown_max = Some(match shown_max {
+            Some(current) => current.max(v),
+            None => v,
+        });
+    }
+
+    match (shown_min, shown_max) {
+        (Some(smin), Some(smax)) => {
+            let (nmin, nmax, source) = match (global_min, global_max) {
+                (Some(gmin), Some(gmax)) => (gmin, gmax, "global_solution"),
+                _ => (smin, smax, "shown_slice"),
+            };
+            log_debug(&format!(
+                "[color-range][slice] gridId={} solutionId={} field={} plane={} idx={} shown=[{:.6e}, {:.6e}] normalize=[{:.6e}, {:.6e}] source={} count={}",
+                gridId,
+                solutionId,
+                field,
+                slicePlane,
+                sliceIndex,
+                smin,
+                smax,
+                nmin,
+                nmax,
+                source,
+                values.len()
+            ));
+        }
+        _ => {
+            log_debug(&format!(
+                "[color-range][slice] gridId={} solutionId={} field={} plane={} idx={} no finite values (count={})",
+                gridId,
+                solutionId,
+                field,
+                slicePlane,
+                sliceIndex,
+                values.len()
+            ));
+        }
+    }
+
+    let colors = compute_colors_with_range(&values, &scheme, global_min, global_max);
 
     let mut mesh = sliced_grid.to_mesh_surface_geometry_decimated(
         respect_iblank.unwrap_or(false),
@@ -1270,9 +1327,11 @@ fn compute_solution_colors_arbitrary_plane(
     colorScheme: String,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    global_min: Option<f32>,
+    global_max: Option<f32>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    use solution::{compute_colors, ColorScheme, ScalarField};
+    use solution::{compute_colors_with_range, ColorScheme, ScalarField};
 
     let _ = window.emit(
         "loading-start",
@@ -1419,12 +1478,146 @@ fn compute_solution_colors_arbitrary_plane(
         values.push(interpolated_field);
     }
 
-    let colors = compute_colors(&values, &scheme);
+    // Log displayed range (values on this shown arbitrary plane) and normalization range
+    let mut shown_min: Option<f32> = None;
+    let mut shown_max: Option<f32> = None;
+    for &v in values.iter() {
+        if !v.is_finite() {
+            continue;
+        }
+        shown_min = Some(match shown_min {
+            Some(current) => current.min(v),
+            None => v,
+        });
+        shown_max = Some(match shown_max {
+            Some(current) => current.max(v),
+            None => v,
+        });
+    }
+
+    match (shown_min, shown_max) {
+        (Some(smin), Some(smax)) => {
+            let (nmin, nmax, source) = match (global_min, global_max) {
+                (Some(gmin), Some(gmax)) => (gmin, gmax, "global_solution"),
+                _ => (smin, smax, "shown_plane"),
+            };
+            log_debug(&format!(
+                "[color-range][arbitrary] gridId={} solutionId={} field={} shown=[{:.6e}, {:.6e}] normalize=[{:.6e}, {:.6e}] source={} count={} planePoint={:?} planeNormal={:?}",
+                gridId,
+                solutionId,
+                field,
+                smin,
+                smax,
+                nmin,
+                nmax,
+                source,
+                values.len(),
+                planePoint,
+                planeNormal
+            ));
+        }
+        _ => {
+            log_debug(&format!(
+                "[color-range][arbitrary] gridId={} solutionId={} field={} no finite values (count={}) planePoint={:?} planeNormal={:?}",
+                gridId,
+                solutionId,
+                field,
+                values.len(),
+                planePoint,
+                planeNormal
+            ));
+        }
+    }
+
+    let colors = compute_colors_with_range(&values, &scheme, global_min, global_max);
     mesh.colors = Some(colors);
 
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
+}
+
+// ============================================================================
+// Field range computation for global color normalization
+// ============================================================================
+
+#[derive(serde::Serialize)]
+pub struct FieldRange {
+    pub min: f32,
+    pub max: f32,
+}
+
+/// Get the min/max range of a scalar field from a cached solution
+#[allow(non_snake_case)]
+#[tauri::command]
+fn get_solution_field_range(solutionId: String, field: String) -> Result<FieldRange, String> {
+    use solution::ScalarField;
+
+    // Load solution from cache
+    let solution = {
+        let cache = SOLUTION_CACHE_V2
+            .lock()
+            .map_err(|_| "Solution cache lock poisoned".to_string())?;
+        let cached = cache
+            .get(&solutionId)
+            .ok_or_else(|| format!("Solution not found in cache: {}", solutionId))?;
+        Arc::clone(&cached.solution)
+    };
+
+    // Parse field
+    let field_enum =
+        ScalarField::from_str(&field).ok_or_else(|| format!("Unknown scalar field: {}", field))?;
+
+    // Compute all field values
+    let mut min: Option<f32> = None;
+    let mut max: Option<f32> = None;
+
+    let grid_points = solution.rho.len();
+    for idx in 0..grid_points {
+        let gamma = solution.gamma.as_ref().map(|g| g[idx]);
+        let value = compute_scalar_field_from_components(
+            solution.rho[idx],
+            solution.rhou[idx],
+            solution.rhov[idx],
+            solution.rhow[idx],
+            solution.rhoe[idx],
+            gamma,
+            field_enum,
+        );
+
+        if !value.is_finite() {
+            continue;
+        }
+
+        min = Some(match min {
+            Some(current) => current.min(value),
+            None => value,
+        });
+        max = Some(match max {
+            Some(current) => current.max(value),
+            None => value,
+        });
+    }
+
+    match (min, max) {
+        (Some(min), Some(max)) => {
+            log_debug(&format!(
+                "[color-range][solution] solutionId={} field={} range=[{:.6e}, {:.6e}] count={}",
+                solutionId, field, min, max, grid_points
+            ));
+            Ok(FieldRange { min, max })
+        }
+        _ => {
+            // No finite values - use default range
+            log_debug(&format!(
+                "[color-range][solution] solutionId={} field={} no finite values, default range=[0.0, 1.0] count={}",
+                solutionId,
+                field,
+                grid_points
+            ));
+            Ok(FieldRange { min: 0.0, max: 1.0 })
+        }
+    }
 }
 
 // ============================================================================
@@ -1736,6 +1929,7 @@ pub fn run() {
             compute_solution_colors,
             compute_solution_colors_sliced,
             compute_solution_colors_arbitrary_plane,
+            get_solution_field_range,
             list_cached_grids,
             list_cached_solutions,
             get_grid_metadata,

@@ -294,33 +294,50 @@ fn hot_color(v: f32) -> (f32, f32, f32) {
 }
 
 /// Compute vertex colors for a scalar field
+/// If global_min and global_max are provided, they are used for normalization.
+/// Otherwise, min/max are computed from the values.
 pub fn compute_colors(values: &[f32], scheme: &ColorScheme) -> Vec<f32> {
+    compute_colors_with_range(values, scheme, None, None)
+}
+
+/// Compute vertex colors with explicit global min/max for consistent normalization across multiple datasets
+pub fn compute_colors_with_range(
+    values: &[f32],
+    scheme: &ColorScheme,
+    global_min: Option<f32>,
+    global_max: Option<f32>,
+) -> Vec<f32> {
     if values.is_empty() {
         return Vec::new();
     }
 
-    // Find min/max using finite values only
-    let mut min: Option<f32> = None;
-    let mut max: Option<f32> = None;
-    for &v in values.iter() {
-        if !v.is_finite() {
-            continue;
-        }
-        min = Some(match min {
-            Some(current) => current.min(v),
-            None => v,
-        });
-        max = Some(match max {
-            Some(current) => current.max(v),
-            None => v,
-        });
-    }
-
-    let (min, max) = match (min, max) {
-        (Some(min), Some(max)) => (min, max),
+    let (min, max) = match (global_min, global_max) {
+        (Some(gmin), Some(gmax)) => (gmin, gmax),
         _ => {
-            // No finite values; return black
-            return vec![0.0; values.len() * 3];
+            // Find min/max using finite values only
+            let mut min: Option<f32> = None;
+            let mut max: Option<f32> = None;
+            for &v in values.iter() {
+                if !v.is_finite() {
+                    continue;
+                }
+                min = Some(match min {
+                    Some(current) => current.min(v),
+                    None => v,
+                });
+                max = Some(match max {
+                    Some(current) => current.max(v),
+                    None => v,
+                });
+            }
+
+            match (min, max) {
+                (Some(min), Some(max)) => (min, max),
+                _ => {
+                    // No finite values; return black
+                    return vec![0.0; values.len() * 3];
+                }
+            }
         }
     };
 

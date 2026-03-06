@@ -569,6 +569,66 @@ export default function Viewer3D({
             });
         }
 
+        // Compute field ranges for consistent coloring across all slices
+        // For each unique solution with a selected scalar field, get the global min/max
+        interface FieldRange {
+            min: number;
+            max: number;
+        }
+        const fieldRangeMap = new Map<string, FieldRange>();
+        let displayedGlobalRange: FieldRange | null = null;
+
+        const fieldRangesPromise = scalarField !== 'none'
+            ? (() => {
+                const solsToProcess = new Set<string>();
+                missing.forEach((grid) => {
+                    if (grid.hasSolution && grid.solutionCacheId) {
+                        solsToProcess.add(grid.solutionCacheId);
+                    }
+                });
+                if (needArbitraryRegen) {
+                    grids.forEach((grid) => {
+                        if (grid.hasSolution && grid.solutionCacheId) {
+                            solsToProcess.add(grid.solutionCacheId);
+                        }
+                    });
+                }
+
+                const rangePromises = Array.from(solsToProcess).map(async (solId) => {
+                    try {
+                        const range = await invoke<FieldRange>('get_solution_field_range', {
+                            solutionId: solId,
+                            field: scalarField
+                        });
+                        fieldRangeMap.set(solId, range);
+                        void invoke('frontend_log', {
+                            message: `[Viewer3D][color-range] solutionId=${solId} field=${scalarField} normalize=[${range.min}, ${range.max}]`
+                        });
+                    } catch (err) {
+                        void invoke('frontend_log', {
+                            message: `[Viewer3D] Failed to get field range for solution ${solId}: ${err}`
+                        });
+                        logger.warn(`Failed to compute field range for solution ${solId}: ${err}`, 'Viewer3D');
+                    }
+                });
+
+                return Promise.all(rangePromises).then(() => {
+                    if (fieldRangeMap.size > 0) {
+                        const ranges = Array.from(fieldRangeMap.values());
+                        const globalMin = Math.min(...ranges.map(r => r.min));
+                        const globalMax = Math.max(...ranges.map(r => r.max));
+                        displayedGlobalRange = { min: globalMin, max: globalMax };
+                        void invoke('frontend_log', {
+                            message: `[Viewer3D][color-range] displayed-global field=${scalarField} normalize=[${globalMin}, ${globalMax}] solutions=${fieldRangeMap.size}`
+                        });
+                    }
+                    void invoke('frontend_log', {
+                        message: `[Viewer3D] Computed field ranges for ${fieldRangeMap.size} solutions`
+                    });
+                });
+            })()
+            : Promise.resolve();
+
         // Process arbitrary cutting planes (global - affect ALL grids, not just those with I/J/K slices)
         // Only process if they don't exist yet or if slices have changed
         const arbitrarySlicePromises = needArbitraryRegen
@@ -591,6 +651,8 @@ export default function Viewer3D({
                                             'Viewer3D'
                                         );
 
+                                        await fieldRangesPromise;
+                                        const range = displayedGlobalRange ?? fieldRangeMap.get(gridItem.solutionCacheId);
                                         mesh = await invoke<MeshGeometry>('compute_solution_colors_arbitrary_plane', {
                                             gridId: gridItem.gridCacheId!,
                                             solutionId: gridItem.solutionCacheId,
@@ -600,6 +662,8 @@ export default function Viewer3D({
                                             planeNormal: arbitrarySlice.planeNormal,
                                             respectIblank: !ignoreIblank,
                                             showFringePoints: showFringePoints,
+                                            globalMin: range?.min,
+                                            globalMax: range?.max,
                                         });
 
                                         const hasColors = mesh.colors && mesh.colors.length > 0;
@@ -674,6 +738,8 @@ export default function Viewer3D({
                                         try {
                                             logger.debug(`Attempting solution coloring for slice ${slice.plane}${slice.index}...`, 'Viewer3D');
 
+                                            await fieldRangesPromise;
+                                            const range = displayedGlobalRange ?? fieldRangeMap.get(gridItem.solutionCacheId);
                                             sliceMesh = await invoke<MeshGeometry>('compute_solution_colors_sliced', {
                                                 gridId: gridItem.gridCacheId!,
                                                 solutionId: gridItem.solutionCacheId,
@@ -683,6 +749,8 @@ export default function Viewer3D({
                                                 colorScheme: colorScheme,
                                                 respectIblank: !ignoreIblank,
                                                 showFringePoints: showFringePoints,
+                                                globalMin: range?.min,
+                                                globalMax: range?.max,
                                             });
 
                                             const hasColors = sliceMesh.colors && sliceMesh.colors.length > 0;
