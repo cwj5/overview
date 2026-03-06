@@ -571,6 +571,7 @@ fn load_plot3d_solution_cached(path: String) -> Result<Vec<SolutionMetadata>, St
 fn convert_grid_to_mesh(
     grid: Plot3DGrid,
     respect_iblank: Option<bool>,
+    show_fringe_points: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     // Emit loading start event
@@ -631,8 +632,11 @@ fn convert_grid_to_mesh(
         ));
     }
 
-    let mesh =
-        grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
+    let mesh = grid.to_mesh_surface_geometry_decimated(
+        respect_iblank.unwrap_or(false),
+        show_fringe_points.unwrap_or(true),
+        decimation_factor,
+    );
 
     // Emit loading end event
     let _ = window.emit("loading-end", ());
@@ -746,6 +750,7 @@ fn compute_scalar_field_from_components(
 fn convert_grid_to_mesh_by_id(
     gridId: String,
     respect_iblank: Option<bool>,
+    show_fringe_points: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     let _ = window.emit("loading-start", "Converting grid to mesh...");
@@ -793,8 +798,11 @@ fn convert_grid_to_mesh_by_id(
         ));
     }
 
-    let mesh =
-        grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
+    let mesh = grid.to_mesh_surface_geometry_decimated(
+        respect_iblank.unwrap_or(false),
+        show_fringe_points.unwrap_or(true),
+        decimation_factor,
+    );
 
     let _ = window.emit("loading-end", ());
 
@@ -836,6 +844,7 @@ fn slice_arbitrary_plane_by_id(
     planePoint: [f32; 3],
     planeNormal: [f32; 3],
     respect_iblank: Option<bool>,
+    _show_fringe_points: Option<bool>,
     _window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     log_debug(&format!(
@@ -882,6 +891,7 @@ fn compute_solution_colors(
     field: String,
     colorScheme: String,
     respect_iblank: Option<bool>,
+    show_fringe_points: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
@@ -991,8 +1001,11 @@ fn compute_solution_colors(
     let values = compute_scalar_field_surface(&solution, field_enum, decimation_factor);
     let colors = compute_colors(&values, &scheme);
 
-    let mut mesh =
-        grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
+    let mut mesh = grid.to_mesh_surface_geometry_decimated(
+        respect_iblank.unwrap_or(false),
+        show_fringe_points.unwrap_or(true),
+        decimation_factor,
+    );
     mesh.colors = Some(colors);
 
     // Filter colors to match blanked vertices
@@ -1045,6 +1058,7 @@ fn compute_solution_colors_sliced(
     field: String,
     colorScheme: String,
     respect_iblank: Option<bool>,
+    show_fringe_points: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, ColorScheme, ScalarField};
@@ -1187,8 +1201,11 @@ fn compute_solution_colors_sliced(
 
     let colors = compute_colors(&values, &scheme);
 
-    let mut mesh =
-        sliced_grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), 1);
+    let mut mesh = sliced_grid.to_mesh_surface_geometry_decimated(
+        respect_iblank.unwrap_or(false),
+        show_fringe_points.unwrap_or(true),
+        1,
+    );
     mesh.colors = Some(colors);
 
     // Filter colors to match blanked vertices in sliced grid
@@ -1252,6 +1269,7 @@ fn compute_solution_colors_arbitrary_plane(
     field: String,
     colorScheme: String,
     respect_iblank: Option<bool>,
+    show_fringe_points: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, ColorScheme, ScalarField};
@@ -1342,6 +1360,7 @@ fn compute_solution_colors_arbitrary_plane(
         planePoint,
         planeNormal,
         respect_iblank.unwrap_or(false),
+        show_fringe_points.unwrap_or(true),
     )?;
 
     let vertex_cell_data = mesh

@@ -291,8 +291,12 @@ impl Plot3DGrid {
         plane_normal: [f32; 3],
         respect_iblank: bool,
     ) -> Result<MeshGeometry, String> {
-        let mut mesh =
-            self.slice_arbitrary_plane_with_solution(plane_point, plane_normal, respect_iblank)?;
+        let mut mesh = self.slice_arbitrary_plane_with_solution(
+            plane_point,
+            plane_normal,
+            respect_iblank,
+            true,
+        )?;
         mesh.vertex_cell_data = None;
         Ok(mesh)
     }
@@ -304,6 +308,7 @@ impl Plot3DGrid {
         plane_point: [f32; 3],
         plane_normal: [f32; 3],
         respect_iblank: bool,
+        show_fringe_points: bool,
     ) -> Result<MeshGeometry, String> {
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
@@ -383,13 +388,15 @@ impl Plot3DGrid {
             [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
         };
         let point_is_blanked = |idx: usize| -> bool {
-            if !respect_iblank {
-                return false;
+            if let Some(iblank) = self.iblank.as_ref() {
+                if respect_iblank && iblank[idx] == 0 {
+                    return true; // Blanked hole point
+                }
+                if !show_fringe_points && iblank[idx] < 0 {
+                    return true; // Fringe point and we're hiding them
+                }
             }
-            let Some(iblank) = self.iblank.as_ref() else {
-                return false;
-            };
-            iblank[idx] == 0
+            false
         };
         let mut vertices = Vec::new();
         let mut vertex_cell_data = Vec::new();
@@ -925,6 +932,7 @@ impl Plot3DGrid {
     pub fn to_mesh_surface_geometry_decimated(
         &self,
         respect_iblank: bool,
+        show_fringe_points: bool,
         decimation_factor: usize,
     ) -> MeshGeometry {
         let decimation = decimation_factor.max(1);
@@ -937,9 +945,12 @@ impl Plot3DGrid {
         let j_decimated = ((j - 1) / decimation) + 1;
 
         let is_blanked = |idx: usize| -> bool {
-            if respect_iblank {
-                if let Some(ref iblank) = self.iblank {
-                    return iblank[idx] == 0;
+            if let Some(ref iblank) = self.iblank {
+                if respect_iblank && iblank[idx] == 0 {
+                    return true; // Blanked hole point
+                }
+                if !show_fringe_points && iblank[idx] < 0 {
+                    return true; // Fringe point and we're hiding them
                 }
             }
             false

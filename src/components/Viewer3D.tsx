@@ -33,6 +33,7 @@ interface Viewer3DProps {
     selectedGridIds: string[];
     isolateSelected: boolean;
     ignoreIblank: boolean;
+    showFringePoints: boolean;
     scalarField?: ScalarField;
     colorScheme?: ColorScheme;
     showWireframe?: boolean;
@@ -351,6 +352,7 @@ export default function Viewer3D({
     selectedGridIds,
     isolateSelected,
     ignoreIblank,
+    showFringePoints,
     scalarField = 'none',
     colorScheme = 'viridis',
     showWireframe = true,
@@ -412,7 +414,7 @@ export default function Viewer3D({
 
         const currentColorKey = `${scalarField}|${colorScheme}`;
         // Only include APPLIED slices in the slice key to avoid reprocessing while editing
-        const sliceKey = `${sliceEnabled}|${ignoreIblank}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
+        const sliceKey = `${sliceEnabled}|${ignoreIblank}|${showFringePoints}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
         const shouldRecolor = lastColorKeyRef.current !== currentColorKey;
         const shouldReslice = lastSliceKeyRef.current !== sliceKey;
 
@@ -597,6 +599,7 @@ export default function Viewer3D({
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
                                             respectIblank: !ignoreIblank,
+                                            showFringePoints: showFringePoints,
                                         });
 
                                         const hasColors = mesh.colors && mesh.colors.length > 0;
@@ -615,6 +618,7 @@ export default function Viewer3D({
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
                                             respectIblank: !ignoreIblank,
+                                            showFringePoints: showFringePoints,
                                         });
                                     }
                                 } else {
@@ -624,6 +628,7 @@ export default function Viewer3D({
                                         planePoint: arbitrarySlice.planePoint,
                                         planeNormal: arbitrarySlice.planeNormal,
                                         respectIblank: !ignoreIblank,
+                                        showFringePoints: showFringePoints,
                                     });
                                 }
 
@@ -677,6 +682,7 @@ export default function Viewer3D({
                                                 field: scalarField,
                                                 colorScheme: colorScheme,
                                                 respectIblank: !ignoreIblank,
+                                                showFringePoints: showFringePoints,
                                             });
 
                                             const hasColors = sliceMesh.colors && sliceMesh.colors.length > 0;
@@ -697,7 +703,8 @@ export default function Viewer3D({
                                             });
                                             sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                                                 grid: slicedGrid,
-                                                respectIblank: !ignoreIblank
+                                                respectIblank: !ignoreIblank,
+                                                showFringePoints: showFringePoints
                                             });
                                         }
                                     } else {
@@ -709,7 +716,8 @@ export default function Viewer3D({
                                         });
                                         sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                                             grid: slicedGrid,
-                                            respectIblank: !ignoreIblank
+                                            respectIblank: !ignoreIblank,
+                                            showFringePoints: showFringePoints
                                         });
                                     }
                                     return { sliceId: slice.id, mesh: sliceMesh };
@@ -809,6 +817,7 @@ export default function Viewer3D({
                                     field: scalarField,
                                     colorScheme: colorScheme,
                                     respectIblank: !ignoreIblank,
+                                    showFringePoints: showFringePoints,
                                 });
                             } catch (invokeErr) {
                                 const invokeMsg = String(invokeErr);
@@ -816,9 +825,10 @@ export default function Viewer3D({
                                 throw invokeErr;
                             }
                         } else {
-                            mesh = await invoke<MeshGeometry>('convert_grid_to_mesh_cached', {
+                            mesh = await invoke<MeshGeometry>('convert_grid_to_mesh_by_id', {
                                 gridId: gridItem.gridCacheId!,
-                                respectIblank: !ignoreIblank
+                                respectIblank: !ignoreIblank,
+                                showFringePoints: showFringePoints
                             });
                         }
                     }
@@ -900,7 +910,7 @@ export default function Viewer3D({
                 message: `[Viewer3D] effect cancelled ms=${Math.round(performance.now() - effectStart)}`
             });
         };
-    }, [grids, ignoreIblank, scalarField, colorScheme, sliceEnabled, gridSlices, appliedSlicesKey]);
+    }, [grids, ignoreIblank, showFringePoints, scalarField, colorScheme, sliceEnabled, gridSlices, appliedSlicesKey]);
 
     const visibleGrids = useMemo(
         () => getVisibleGridItems(grids, selectedGridIds, isolateSelected),

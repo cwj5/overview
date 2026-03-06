@@ -91,6 +91,7 @@ const App = () => {
   const [isolateSelected, setIsolateSelected] = useState(false);
   const [hasSolution, setHasSolution] = useState(false);
   const [ignoreIblank, setIgnoreIblank] = useState(false);
+  const [showFringePoints, setShowFringePoints] = useState(true);
   const [currentScalarField, setCurrentScalarField] = useState<ScalarField>('none');
   const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
   const [showWireframe, setShowWireframe] = useState(true);
@@ -244,6 +245,16 @@ const App = () => {
           },
         });
 
+        const showFringePointsItem = await CheckMenuItem.new({
+          id: "show-fringe-points",
+          text: "Show Fringe Points",
+          enabled: hasIblankData,
+          checked: showFringePoints,
+          action: () => {
+            setShowFringePoints((prev) => !prev);
+          },
+        });
+
         // Wireframe option
         const wireframeItem = await CheckMenuItem.new({
           id: "show-wireframe",
@@ -271,6 +282,7 @@ const App = () => {
           text: "View",
           items: [
             ignoreIblankItem,
+            showFringePointsItem,
             separator,
             wireframeItem,
             smoothShadingItem,
@@ -288,7 +300,7 @@ const App = () => {
     };
 
     setupMenu();
-  }, [hasIblankData, ignoreIblank, showWireframe, shadingMode]);
+  }, [hasIblankData, ignoreIblank, showFringePoints, showWireframe, shadingMode]);
 
   // Reset ignoreIblank when IBLANK data is no longer available
   useEffect(() => {
@@ -296,6 +308,13 @@ const App = () => {
       setIgnoreIblank(false);
     }
   }, [hasIblankData, ignoreIblank]);
+
+  // Reset showFringePoints when IBLANK data is no longer available
+  useEffect(() => {
+    if (!hasIblankData && !showFringePoints) {
+      setShowFringePoints(true);
+    }
+  }, [hasIblankData, showFringePoints]);
 
   const gridTree = useMemo(() => groupGridsByFile(grids), [grids]);
   const selectedGrids = useMemo(
@@ -1167,6 +1186,7 @@ const App = () => {
               selectedGridIds={selectedGridIds}
               isolateSelected={isolateSelected}
               ignoreIblank={ignoreIblank}
+              showFringePoints={showFringePoints}
               scalarField={currentScalarField}
               colorScheme={currentColorScheme}
               showWireframe={showWireframe}
