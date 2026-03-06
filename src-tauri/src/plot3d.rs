@@ -382,26 +382,14 @@ impl Plot3DGrid {
             let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
             [self.x_coords[idx], self.y_coords[idx], self.z_coords[idx]]
         };
-        let cell_has_blanked_corner = |i_idx: usize, j_idx: usize, k_idx: usize| -> bool {
+        let point_is_blanked = |idx: usize| -> bool {
             if !respect_iblank {
                 return false;
             }
             let Some(iblank) = self.iblank.as_ref() else {
                 return false;
             };
-
-            let corners = [
-                Self::linear_index(i_idx, j_idx, k_idx, i, j),
-                Self::linear_index(i_idx + 1, j_idx, k_idx, i, j),
-                Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j),
-                Self::linear_index(i_idx, j_idx + 1, k_idx, i, j),
-                Self::linear_index(i_idx, j_idx, k_idx + 1, i, j),
-                Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j),
-                Self::linear_index(i_idx + 1, j_idx + 1, k_idx + 1, i, j),
-                Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j),
-            ];
-
-            corners.iter().any(|&idx| iblank[idx] == 0)
+            iblank[idx] == 0
         };
         let mut vertices = Vec::new();
         let mut vertex_cell_data = Vec::new();
@@ -446,9 +434,26 @@ impl Plot3DGrid {
         for k_idx in 0..k - 1 {
             for j_idx in 0..j - 1 {
                 for i_idx in 0..i - 1 {
-                    if cell_has_blanked_corner(i_idx, j_idx, k_idx) {
-                        continue;
-                    }
+                    let corner_indices = [
+                        Self::linear_index(i_idx, j_idx, k_idx, i, j),
+                        Self::linear_index(i_idx + 1, j_idx, k_idx, i, j),
+                        Self::linear_index(i_idx + 1, j_idx + 1, k_idx, i, j),
+                        Self::linear_index(i_idx, j_idx + 1, k_idx, i, j),
+                        Self::linear_index(i_idx, j_idx, k_idx + 1, i, j),
+                        Self::linear_index(i_idx + 1, j_idx, k_idx + 1, i, j),
+                        Self::linear_index(i_idx + 1, j_idx + 1, k_idx + 1, i, j),
+                        Self::linear_index(i_idx, j_idx + 1, k_idx + 1, i, j),
+                    ];
+                    let corner_blanked = [
+                        point_is_blanked(corner_indices[0]),
+                        point_is_blanked(corner_indices[1]),
+                        point_is_blanked(corner_indices[2]),
+                        point_is_blanked(corner_indices[3]),
+                        point_is_blanked(corner_indices[4]),
+                        point_is_blanked(corner_indices[5]),
+                        point_is_blanked(corner_indices[6]),
+                        point_is_blanked(corner_indices[7]),
+                    ];
 
                     // Get the 8 corners of the hexahedron
                     let corners = [
@@ -501,6 +506,10 @@ impl Plot3DGrid {
                     };
 
                     for &(c1, c2) in &edges {
+                        if corner_blanked[c1] || corner_blanked[c2] {
+                            continue;
+                        }
+
                         let d1 = corner_dists[c1];
                         let d2 = corner_dists[c2];
 
@@ -936,15 +945,29 @@ impl Plot3DGrid {
             false
         };
 
-        let mut vertices = Vec::with_capacity(i_decimated * j_decimated * 3);
+        // Build mapping from grid indices to output mesh indices, skipping blanked vertices
+        let mut vertex_index_map: Vec<Option<u32>> = vec![None; i_decimated * j_decimated];
+        let mut vertices = Vec::new();
+        let mut output_vertex_count = 0u32;
+
         for j_step in 0..j_decimated {
             let j_idx = (j_step * decimation).min(j - 1);
             for i_step in 0..i_decimated {
                 let i_idx = (i_step * decimation).min(i - 1);
-                let idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                vertices.push(self.x_coords[idx]);
-                vertices.push(self.y_coords[idx]);
-                vertices.push(self.z_coords[idx]);
+                let grid_idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                let grid_vertex_idx = j_step * i_decimated + i_step;
+
+                if is_blanked(grid_idx) {
+                    // Skip blanked vertices
+                    vertex_index_map[grid_vertex_idx] = None;
+                } else {
+                    // Add non-blanked vertices to output array
+                    vertex_index_map[grid_vertex_idx] = Some(output_vertex_count);
+                    vertices.push(self.x_coords[grid_idx]);
+                    vertices.push(self.y_coords[grid_idx]);
+                    vertices.push(self.z_coords[grid_idx]);
+                    output_vertex_count += 1;
+                }
             }
         }
 
@@ -953,27 +976,30 @@ impl Plot3DGrid {
         let mut triangle_indices = Vec::with_capacity(max_quads * 6);
 
         for j_step in 0..j_decimated - 1 {
-            let j_idx = (j_step * decimation).min(j - 1);
-            let j_next = ((j_step + 1) * decimation).min(j - 1);
-
             for i_step in 0..i_decimated - 1 {
-                let i_idx = (i_step * decimation).min(i - 1);
-                let i_next = ((i_step + 1) * decimation).min(i - 1);
+                // Get mapped indices for quad corners
+                let grid_v00 = j_step * i_decimated + i_step;
+                let grid_v10 = j_step * i_decimated + (i_step + 1);
+                let grid_v01 = (j_step + 1) * i_decimated + i_step;
+                let grid_v11 = (j_step + 1) * i_decimated + (i_step + 1);
 
-                let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
-                let idx10 = Self::linear_index(i_next, j_idx, k_idx, i, j);
-                let idx01 = Self::linear_index(i_idx, j_next, k_idx, i, j);
-                let idx11 = Self::linear_index(i_next, j_next, k_idx, i, j);
-
-                if is_blanked(idx00) || is_blanked(idx10) || is_blanked(idx01) || is_blanked(idx11)
-                {
-                    continue;
-                }
-
-                let v00 = (j_step * i_decimated + i_step) as u32;
-                let v10 = (j_step * i_decimated + (i_step + 1)) as u32;
-                let v01 = ((j_step + 1) * i_decimated + i_step) as u32;
-                let v11 = ((j_step + 1) * i_decimated + (i_step + 1)) as u32;
+                // Skip quad if any corner is blanked
+                let v00 = match vertex_index_map[grid_v00] {
+                    Some(idx) => idx,
+                    None => continue,
+                };
+                let v10 = match vertex_index_map[grid_v10] {
+                    Some(idx) => idx,
+                    None => continue,
+                };
+                let v01 = match vertex_index_map[grid_v01] {
+                    Some(idx) => idx,
+                    None => continue,
+                };
+                let v11 = match vertex_index_map[grid_v11] {
+                    Some(idx) => idx,
+                    None => continue,
+                };
 
                 line_indices.extend_from_slice(&[v00, v10, v10, v11, v11, v01, v01, v00]);
 
@@ -1027,7 +1053,7 @@ impl Plot3DGrid {
             indices: line_indices,
             triangle_indices,
             normals,
-            vertex_count: i_decimated * j_decimated,
+            vertex_count: output_vertex_count as usize,
             face_count,
             colors: None,
             vertex_cell_data: None,

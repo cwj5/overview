@@ -596,7 +596,7 @@ export default function Viewer3D({
                                             colorScheme: colorScheme,
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
-                                            respect_iblank: !ignoreIblank,
+                                            respectIblank: !ignoreIblank,
                                         });
 
                                         const hasColors = mesh.colors && mesh.colors.length > 0;
@@ -614,7 +614,7 @@ export default function Viewer3D({
                                             gridId: gridItem.gridCacheId!,
                                             planePoint: arbitrarySlice.planePoint,
                                             planeNormal: arbitrarySlice.planeNormal,
-                                            respect_iblank: !ignoreIblank,
+                                            respectIblank: !ignoreIblank,
                                         });
                                     }
                                 } else {
@@ -623,7 +623,7 @@ export default function Viewer3D({
                                         gridId: gridItem.gridCacheId!,
                                         planePoint: arbitrarySlice.planePoint,
                                         planeNormal: arbitrarySlice.planeNormal,
-                                        respect_iblank: !ignoreIblank,
+                                        respectIblank: !ignoreIblank,
                                     });
                                 }
 
@@ -676,7 +676,7 @@ export default function Viewer3D({
                                                 sliceIndex: slice.index,
                                                 field: scalarField,
                                                 colorScheme: colorScheme,
-                                                respect_iblank: !ignoreIblank,
+                                                respectIblank: !ignoreIblank,
                                             });
 
                                             const hasColors = sliceMesh.colors && sliceMesh.colors.length > 0;
@@ -697,7 +697,7 @@ export default function Viewer3D({
                                             });
                                             sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                                                 grid: slicedGrid,
-                                                respect_iblank: !ignoreIblank
+                                                respectIblank: !ignoreIblank
                                             });
                                         }
                                     } else {
@@ -709,7 +709,7 @@ export default function Viewer3D({
                                         });
                                         sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                                             grid: slicedGrid,
-                                            respect_iblank: !ignoreIblank
+                                            respectIblank: !ignoreIblank
                                         });
                                     }
                                     return { sliceId: slice.id, mesh: sliceMesh };
@@ -808,7 +808,7 @@ export default function Viewer3D({
                                     solutionId: gridItem.solutionCacheId,
                                     field: scalarField,
                                     colorScheme: colorScheme,
-                                    respect_iblank: !ignoreIblank,
+                                    respectIblank: !ignoreIblank,
                                 });
                             } catch (invokeErr) {
                                 const invokeMsg = String(invokeErr);
@@ -818,7 +818,7 @@ export default function Viewer3D({
                         } else {
                             mesh = await invoke<MeshGeometry>('convert_grid_to_mesh_cached', {
                                 gridId: gridItem.gridCacheId!,
-                                respect_iblank: !ignoreIblank
+                                respectIblank: !ignoreIblank
                             });
                         }
                     }

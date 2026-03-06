@@ -995,6 +995,40 @@ fn compute_solution_colors(
         grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), decimation_factor);
     mesh.colors = Some(colors);
 
+    // Filter colors to match blanked vertices
+    if respect_iblank.unwrap_or(false) {
+        if let (Some(iblank), Some(colors)) = (grid.iblank.as_ref(), mesh.colors.take()) {
+            let decimation = decimation_factor.max(1);
+            let grid_i = grid.dimensions.i as usize;
+            let grid_j = grid.dimensions.j as usize;
+            let i_decimated = ((grid_i - 1) / decimation) + 1;
+            let j_decimated = ((grid_j - 1) / decimation) + 1;
+
+            let mut filtered_colors = Vec::new();
+            for j_step in 0..j_decimated {
+                let j_idx = (j_step * decimation).min(grid_j - 1);
+                for i_step in 0..i_decimated {
+                    let i_idx = (i_step * decimation).min(grid_i - 1);
+                    let grid_idx = j_idx * grid_i + i_idx;
+                    if iblank[grid_idx] != 0 {
+                        let grid_vertex_idx = j_step * i_decimated + i_step;
+                        let color_idx = grid_vertex_idx * 3;
+                        if color_idx + 2 < colors.len() {
+                            filtered_colors.push(colors[color_idx]);
+                            filtered_colors.push(colors[color_idx + 1]);
+                            filtered_colors.push(colors[color_idx + 2]);
+                        }
+                    }
+                }
+            }
+
+            mesh.colors = if filtered_colors.is_empty() {
+                None
+            } else {
+                Some(filtered_colors)
+            };
+        }
+    }
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
@@ -1157,6 +1191,36 @@ fn compute_solution_colors_sliced(
         sliced_grid.to_mesh_surface_geometry_decimated(respect_iblank.unwrap_or(false), 1);
     mesh.colors = Some(colors);
 
+    // Filter colors to match blanked vertices in sliced grid
+    if respect_iblank.unwrap_or(false) {
+        if let (Some(iblank), Some(colors)) = (sliced_grid.iblank.as_ref(), mesh.colors.take()) {
+            let i_slice = sliced_grid.dimensions.i as usize;
+            let j_slice = sliced_grid.dimensions.j as usize;
+
+            let mut filtered_colors = Vec::new();
+            for j_idx in 0..j_slice {
+                for i_idx in 0..i_slice {
+                    let grid_idx = j_idx * i_slice + i_idx;
+                    if iblank[grid_idx] != 0 {
+                        let vertex_idx = j_idx * i_slice + i_idx;
+                        let color_idx = vertex_idx * 3;
+                        if color_idx + 2 < colors.len() {
+                            filtered_colors.push(colors[color_idx]);
+                            filtered_colors.push(colors[color_idx + 1]);
+                            filtered_colors.push(colors[color_idx + 2]);
+                        }
+                    }
+                }
+            }
+
+            mesh.colors = if filtered_colors.is_empty() {
+                None
+            } else {
+                Some(filtered_colors)
+            };
+        }
+    }
+
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
@@ -1233,7 +1297,6 @@ fn compute_solution_colors_arbitrary_plane(
             gridId, grid_index, solutionId, solution_grid_index
         ));
     }
-
     if grid.dimensions.i != solution.dimensions.i
         || grid.dimensions.j != solution.dimensions.j
         || grid.dimensions.k != solution.dimensions.k
