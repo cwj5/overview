@@ -97,9 +97,192 @@ fn normalize_iblank_flags(
     )
 }
 
+fn is_hidden_iblank_point(
+    iblank: Option<&Vec<i32>>,
+    idx: usize,
+    respect_iblank: bool,
+    show_fringe_points: bool,
+) -> bool {
+    if let Some(iblank_data) = iblank {
+        if respect_iblank && iblank_data[idx] == 0 {
+            return true;
+        }
+        if !show_fringe_points && iblank_data[idx] < 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn filter_vertex_mode_surface_colors(
+    colors: &[f32],
+    iblank: Option<&Vec<i32>>,
+    grid_i: usize,
+    grid_j: usize,
+    decimation: usize,
+    respect_iblank: bool,
+    show_fringe_points: bool,
+) -> Option<Vec<f32>> {
+    if !respect_iblank || iblank.is_none() {
+        return if colors.is_empty() {
+            None
+        } else {
+            Some(colors.to_vec())
+        };
+    }
+
+    let i_decimated = ((grid_i - 1) / decimation) + 1;
+    let j_decimated = ((grid_j - 1) / decimation) + 1;
+
+    let mut filtered_colors = Vec::new();
+    for j_step in 0..j_decimated {
+        let j_idx = (j_step * decimation).min(grid_j - 1);
+        for i_step in 0..i_decimated {
+            let i_idx = (i_step * decimation).min(grid_i - 1);
+            let grid_idx = j_idx * grid_i + i_idx;
+            if is_hidden_iblank_point(iblank, grid_idx, respect_iblank, show_fringe_points) {
+                continue;
+            }
+
+            let grid_vertex_idx = j_step * i_decimated + i_step;
+            let color_idx = grid_vertex_idx * 3;
+            if color_idx + 2 < colors.len() {
+                filtered_colors.push(colors[color_idx]);
+                filtered_colors.push(colors[color_idx + 1]);
+                filtered_colors.push(colors[color_idx + 2]);
+            }
+        }
+    }
+
+    if filtered_colors.is_empty() {
+        None
+    } else {
+        Some(filtered_colors)
+    }
+}
+
+fn compact_mesh_and_colors_to_used_vertices(
+    mesh: &mut MeshGeometry,
+    colors: &[f32],
+) -> Option<Vec<f32>> {
+    let old_vertex_count = mesh.vertices.len() / 3;
+    if old_vertex_count == 0 {
+        mesh.vertex_count = 0;
+        mesh.face_count = 0;
+        return None;
+    }
+
+    let mut used = vec![false; old_vertex_count];
+    for &idx in &mesh.indices {
+        let uidx = idx as usize;
+        if uidx < old_vertex_count {
+            used[uidx] = true;
+        }
+    }
+    for &idx in &mesh.triangle_indices {
+        let uidx = idx as usize;
+        if uidx < old_vertex_count {
+            used[uidx] = true;
+        }
+    }
+
+    if !used.iter().any(|&u| u) {
+        mesh.vertices.clear();
+        mesh.normals.clear();
+        mesh.indices.clear();
+        mesh.triangle_indices.clear();
+        mesh.vertex_count = 0;
+        mesh.face_count = 0;
+        return None;
+    }
+
+    let mut remap = vec![u32::MAX; old_vertex_count];
+    let mut new_vertices = Vec::new();
+    let mut new_normals = Vec::new();
+    let mut new_colors = Vec::new();
+
+    for old_idx in 0..old_vertex_count {
+        if !used[old_idx] {
+            continue;
+        }
+
+        remap[old_idx] = (new_vertices.len() / 3) as u32;
+
+        let old_vertex_start = old_idx * 3;
+        if old_vertex_start + 2 < mesh.vertices.len() {
+            new_vertices.push(mesh.vertices[old_vertex_start]);
+            new_vertices.push(mesh.vertices[old_vertex_start + 1]);
+            new_vertices.push(mesh.vertices[old_vertex_start + 2]);
+        }
+
+        if old_vertex_start + 2 < mesh.normals.len() {
+            new_normals.push(mesh.normals[old_vertex_start]);
+            new_normals.push(mesh.normals[old_vertex_start + 1]);
+            new_normals.push(mesh.normals[old_vertex_start + 2]);
+        }
+
+        if old_vertex_start + 2 < colors.len() {
+            new_colors.push(colors[old_vertex_start]);
+            new_colors.push(colors[old_vertex_start + 1]);
+            new_colors.push(colors[old_vertex_start + 2]);
+        }
+    }
+
+    for idx in &mut mesh.indices {
+        let old = *idx as usize;
+        if old < remap.len() {
+            *idx = remap[old];
+        }
+    }
+    for idx in &mut mesh.triangle_indices {
+        let old = *idx as usize;
+        if old < remap.len() {
+            *idx = remap[old];
+        }
+    }
+
+    mesh.vertices = new_vertices;
+    mesh.normals = new_normals;
+    mesh.vertex_count = mesh.vertices.len() / 3;
+    mesh.face_count = mesh.triangle_indices.len() / 3;
+
+    if new_colors.is_empty() {
+        None
+    } else {
+        Some(new_colors)
+    }
+}
+
+fn align_surface_mesh_colors(
+    mesh: &mut MeshGeometry,
+    colors: &[f32],
+    iblank: Option<&Vec<i32>>,
+    grid_i: usize,
+    grid_j: usize,
+    decimation: usize,
+    respect_iblank: bool,
+    show_fringe_points: bool,
+    filter_mode: IblankFilterMode,
+) -> Option<Vec<f32>> {
+    match filter_mode {
+        IblankFilterMode::Vertex => filter_vertex_mode_surface_colors(
+            colors,
+            iblank,
+            grid_i,
+            grid_j,
+            decimation,
+            respect_iblank,
+            show_fringe_points,
+        ),
+        IblankFilterMode::Cell => compact_mesh_and_colors_to_used_vertices(mesh, colors),
+    }
+}
+
 #[cfg(test)]
 mod iblank_flag_tests {
-    use super::{normalize_iblank_flags, IblankFilterMode};
+    use super::{
+        align_surface_mesh_colors, normalize_iblank_flags, IblankFilterMode, MeshGeometry,
+    };
 
     #[test]
     fn normalize_defaults_to_no_respect_and_show_fringe() {
@@ -141,6 +324,91 @@ mod iblank_flag_tests {
     fn normalize_defaults_to_vertex_mode_on_invalid() {
         let (_, _, mode) = normalize_iblank_flags(None, None, Some("invalid_mode".to_string()));
         assert_eq!(mode, IblankFilterMode::Vertex); // Falls back to default
+    }
+
+    #[test]
+    fn align_vertex_mode_filters_hidden_fringe_colors() {
+        let mut mesh = MeshGeometry {
+            vertices: vec![],
+            indices: vec![],
+            triangle_indices: vec![],
+            normals: vec![],
+            vertex_count: 0,
+            face_count: 0,
+            colors: None,
+            vertex_cell_data: None,
+        };
+
+        let colors = vec![
+            1.0, 0.0, 0.0, // v0
+            0.0, 1.0, 0.0, // v1 (fringe, should be removed)
+            0.0, 0.0, 1.0, // v2
+            1.0, 1.0, 0.0, // v3
+        ];
+        let iblank = vec![1, -1, 1, 1];
+
+        let aligned = align_surface_mesh_colors(
+            &mut mesh,
+            &colors,
+            Some(&iblank),
+            2,
+            2,
+            1,
+            true,
+            false,
+            IblankFilterMode::Vertex,
+        )
+        .expect("Expected filtered colors");
+
+        assert_eq!(aligned.len(), 9);
+        assert_eq!(aligned, vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn align_cell_mode_compacts_mesh_and_colors_to_used_vertices() {
+        let mut mesh = MeshGeometry {
+            vertices: vec![
+                0.0, 0.0, 0.0, // v0 (used)
+                1.0, 0.0, 0.0, // v1 (used)
+                1.0, 1.0, 0.0, // v2 (used)
+                0.0, 1.0, 0.0, // v3 (unused)
+            ],
+            indices: vec![0, 1, 1, 2, 2, 0],
+            triangle_indices: vec![0, 1, 2],
+            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            vertex_count: 4,
+            face_count: 1,
+            colors: None,
+            vertex_cell_data: None,
+        };
+
+        let colors = vec![
+            1.0, 0.0, 0.0, // v0
+            0.0, 1.0, 0.0, // v1
+            0.0, 0.0, 1.0, // v2
+            1.0, 1.0, 0.0, // v3 (unused, should be dropped)
+        ];
+
+        let aligned = align_surface_mesh_colors(
+            &mut mesh,
+            &colors,
+            None,
+            2,
+            2,
+            1,
+            true,
+            true,
+            IblankFilterMode::Cell,
+        )
+        .expect("Expected compacted colors");
+
+        assert_eq!(mesh.vertex_count, 3);
+        assert_eq!(mesh.vertices.len(), 9);
+        assert_eq!(mesh.normals.len(), 9);
+        assert_eq!(mesh.indices, vec![0, 1, 1, 2, 2, 0]);
+        assert_eq!(mesh.triangle_indices, vec![0, 1, 2]);
+        assert_eq!(aligned.len(), 9);
+        assert_eq!(aligned, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 }
 
@@ -948,7 +1216,7 @@ fn slice_arbitrary_plane_by_id(
     iblank_filter_mode: Option<String>,
     _window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    let (effective_respect_iblank, effective_show_fringe_points, _effective_filter_mode) =
+    let (effective_respect_iblank, effective_show_fringe_points, effective_filter_mode) =
         normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     log_debug(&format!(
@@ -972,6 +1240,7 @@ fn slice_arbitrary_plane_by_id(
         planeNormal,
         effective_respect_iblank,
         effective_show_fringe_points,
+        effective_filter_mode,
     );
 
     match &result {
@@ -1119,42 +1388,17 @@ fn compute_solution_colors(
         effective_filter_mode,
         decimation_factor,
     );
-    mesh.colors = Some(colors);
-
-    // Filter colors to match blanked vertices
-    if effective_respect_iblank {
-        if let (Some(iblank), Some(colors)) = (grid.iblank.as_ref(), mesh.colors.take()) {
-            let decimation = decimation_factor.max(1);
-            let grid_i = grid.dimensions.i as usize;
-            let grid_j = grid.dimensions.j as usize;
-            let i_decimated = ((grid_i - 1) / decimation) + 1;
-            let j_decimated = ((grid_j - 1) / decimation) + 1;
-
-            let mut filtered_colors = Vec::new();
-            for j_step in 0..j_decimated {
-                let j_idx = (j_step * decimation).min(grid_j - 1);
-                for i_step in 0..i_decimated {
-                    let i_idx = (i_step * decimation).min(grid_i - 1);
-                    let grid_idx = j_idx * grid_i + i_idx;
-                    if iblank[grid_idx] != 0 {
-                        let grid_vertex_idx = j_step * i_decimated + i_step;
-                        let color_idx = grid_vertex_idx * 3;
-                        if color_idx + 2 < colors.len() {
-                            filtered_colors.push(colors[color_idx]);
-                            filtered_colors.push(colors[color_idx + 1]);
-                            filtered_colors.push(colors[color_idx + 2]);
-                        }
-                    }
-                }
-            }
-
-            mesh.colors = if filtered_colors.is_empty() {
-                None
-            } else {
-                Some(filtered_colors)
-            };
-        }
-    }
+    mesh.colors = align_surface_mesh_colors(
+        &mut mesh,
+        &colors,
+        grid.iblank.as_ref(),
+        grid.dimensions.i as usize,
+        grid.dimensions.j as usize,
+        decimation_factor.max(1),
+        effective_respect_iblank,
+        effective_show_fringe_points,
+        effective_filter_mode,
+    );
     let _ = window.emit("loading-end", ());
 
     Ok(mesh)
@@ -1377,37 +1621,17 @@ fn compute_solution_colors_sliced(
         effective_filter_mode,
         1,
     );
-    mesh.colors = Some(colors);
-
-    // Filter colors to match blanked vertices in sliced grid
-    if effective_respect_iblank {
-        if let (Some(iblank), Some(colors)) = (sliced_grid.iblank.as_ref(), mesh.colors.take()) {
-            let i_slice = sliced_grid.dimensions.i as usize;
-            let j_slice = sliced_grid.dimensions.j as usize;
-
-            let mut filtered_colors = Vec::new();
-            for j_idx in 0..j_slice {
-                for i_idx in 0..i_slice {
-                    let grid_idx = j_idx * i_slice + i_idx;
-                    if iblank[grid_idx] != 0 {
-                        let vertex_idx = j_idx * i_slice + i_idx;
-                        let color_idx = vertex_idx * 3;
-                        if color_idx + 2 < colors.len() {
-                            filtered_colors.push(colors[color_idx]);
-                            filtered_colors.push(colors[color_idx + 1]);
-                            filtered_colors.push(colors[color_idx + 2]);
-                        }
-                    }
-                }
-            }
-
-            mesh.colors = if filtered_colors.is_empty() {
-                None
-            } else {
-                Some(filtered_colors)
-            };
-        }
-    }
+    mesh.colors = align_surface_mesh_colors(
+        &mut mesh,
+        &colors,
+        sliced_grid.iblank.as_ref(),
+        sliced_grid.dimensions.i as usize,
+        sliced_grid.dimensions.j as usize,
+        1,
+        effective_respect_iblank,
+        effective_show_fringe_points,
+        effective_filter_mode,
+    );
 
     let _ = window.emit("loading-end", ());
 
@@ -1453,7 +1677,7 @@ fn compute_solution_colors_arbitrary_plane(
         format!("Computing {} field on arbitrary plane...", field),
     );
 
-    let (effective_respect_iblank, effective_show_fringe_points, _effective_filter_mode) =
+    let (effective_respect_iblank, effective_show_fringe_points, effective_filter_mode) =
         normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     // Load grid from cache
@@ -1538,6 +1762,7 @@ fn compute_solution_colors_arbitrary_plane(
         planeNormal,
         effective_respect_iblank,
         effective_show_fringe_points,
+        effective_filter_mode,
     )?;
 
     let vertex_cell_data = mesh

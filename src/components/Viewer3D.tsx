@@ -408,7 +408,7 @@ export default function Viewer3D({
     useEffect(() => {
         const effectStart = performance.now();
         void invoke('frontend_log', {
-            message: `[Viewer3D] effect start grids=${grids.length} field=${scalarField} scheme=${colorScheme} ignoreIblank=${ignoreIblank}`
+            message: `[Viewer3D] effect start grids=${grids.length} field=${scalarField} scheme=${colorScheme} ignoreIblank=${ignoreIblank} mode=${iblankFilterMode}`
         });
         if (grids.length === 0) {
             return;
@@ -416,7 +416,7 @@ export default function Viewer3D({
 
         const currentColorKey = `${scalarField}|${colorScheme}`;
         // Only include APPLIED slices in the slice key to avoid reprocessing while editing
-        const sliceKey = `${sliceEnabled}|${ignoreIblank}|${showFringePoints}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
+        const sliceKey = `${sliceEnabled}|${ignoreIblank}|${showFringePoints}|${iblankFilterMode}|${JSON.stringify(gridSlices)}|${appliedSlicesKey}`;
         const shouldRecolor = lastColorKeyRef.current !== currentColorKey;
         const shouldReslice = lastSliceKeyRef.current !== sliceKey;
 
@@ -988,7 +988,7 @@ export default function Viewer3D({
                 message: `[Viewer3D] effect cancelled ms=${Math.round(performance.now() - effectStart)}`
             });
         };
-    }, [grids, ignoreIblank, showFringePoints, scalarField, colorScheme, sliceEnabled, gridSlices, appliedSlicesKey]);
+    }, [grids, ignoreIblank, showFringePoints, iblankFilterMode, scalarField, colorScheme, sliceEnabled, gridSlices, appliedSlicesKey]);
 
     const visibleGrids = useMemo(
         () => getVisibleGridItems(grids, selectedGridIds, isolateSelected),

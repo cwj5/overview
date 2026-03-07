@@ -650,21 +650,25 @@ Add an optional toggle to switch between two filtering modes:
 
 ### Phase 3 Status (March 6, 2026)
 
-**Current Progress**:
+**Status**: ✅ COMPLETE - Index Slices, Full Surfaces, and Arbitrary Planes
+
+**Completed**:
 - ✅ Public `IblankFilterMode` enum defined in lib.rs with `from_str()` parsing
 - ✅ `to_mesh_surface_geometry_decimated()` refactored to dispatcher (routes to mode-specific implementations)
-- ✅ Created stub `to_mesh_surface_geometry_decimated_vertex_mode()` to hold existing vertex-mode logic
+- ✅ `to_mesh_surface_geometry_decimated_vertex_mode()` implemented with full vertex-skipping logic
+- ✅ `to_mesh_surface_geometry_decimated_cell_mode()` implemented with cell-rejection logic
+- ✅ All 4 mesh function calls in lib commands updated to pass `effective_filter_mode`
+- ✅ Tests updated to pass mode parameter and verify both modes work correctly
 
-**Next Steps** (Continue Phase 3):
-1. Update all 6 mesh function calls in lib commands to pass `effective_filter_mode`
-2. Wrap existing `to_mesh_surface_geometry_decimated_vertex_mode()` body completely
-3. Implement new `to_mesh_surface_geometry_decimated_cell_mode()` function
-4. Apply same pattern to `slice_arbitrary_plane_with_solution()` and related functions
-5. Update helper predicates (`is_blanked()`) to handle fringe visibility correctly
+**Arbitrary Plane Additions Completed**:
+1. ✅ Added `iblank_filter_mode` parameter to `slice_arbitrary_plane()` and `slice_arbitrary_plane_with_solution()`
+2. ✅ Implemented cell-mode early rejection (skip cell if any of 8 corners blanked/hidden before intersection)
+3. ✅ Updated arbitrary plane tests to verify both modes
+4. ✅ Updated arbitrary plane command handlers in lib.rs (`slice_arbitrary_plane_by_id`, `compute_solution_colors_arbitrary_plane`)
 
-**Key Files Being Modified**:
-- `/Users/cwj5/software/overview/src-tauri/src/lib.rs` - Command function calls
-- `/Users/cwj5/software/overview/src-tauri/src/plot3d.rs` - Geometry generation with mode branching
+**Key Files Modified**:
+- `/Users/cwj5/software/overview/src-tauri/src/lib.rs` - Command signatures and calls
+- `/Users/cwj5/software/overview/src-tauri/src/plot3d.rs` - Dual-mode geometry generation for surfaces
 
 ---
 
@@ -682,30 +686,31 @@ Add an optional toggle to switch between two filtering modes:
 - [x] Update all 6 command signatures
 - [x] Pass mode through to geometry/color functions (parameter accepted, will be used in Phase 3)
 
-**Phase 3: Mesh Geometry Branching** 🚧 IN PROGRESS (~4–6 hours)
+**Phase 3: Mesh Geometry Branching** ✅ COMPLETE (~4–6 hours)
 - [x] Refactored `to_mesh_surface_geometry_decimated()` with mode branching dispatcher
 - [x] Created `to_mesh_surface_geometry_decimated_vertex_mode()` stub for existing implementation
-- [ ] Implement `to_mesh_surface_geometry_decimated_cell_mode()` function
-- [ ] Update all 6 command calls in lib.rs to pass effective_filter_mode
-- [ ] Refactor `slice_arbitrary_plane_with_solution()` with mode branching
-- [ ] Implement Cell-mode 8-corner rejection logic
-- [ ] Update helper predicates for fringe visibility
+- [x] Implemented `to_mesh_surface_geometry_decimated_cell_mode()` function
+- [x] Updated all 4 command calls in lib.rs to pass effective_filter_mode
+- [x] Refactor `slice_arbitrary_plane_with_solution()`/`slice_arbitrary_plane()` with mode parameter
+- [x] Implement Cell-mode 8-corner rejection logic for arbitrary planes
+- [x] Update helper predicates for fringe visibility in arbitrary-plane path
 
-**Phase 4: Color Alignment** (~2–3 hours)
-- [ ] Implement color remapping logic for Cell mode
-- [ ] Update compute_solution_colors* functions to align colors with surviving vertices
-- [ ] Validate color array length in tests
+**Phase 4: Color Alignment** ✅ COMPLETE (~2–3 hours)
+- [x] Implement color remapping logic for Cell mode (compact to surviving vertices only)
+- [x] Update compute_solution_colors* surface functions to align colors with surviving vertices
+- [x] Validate color array length in tests (new unit tests for vertex fringe filtering and cell compaction)
 
-**Phase 5: Test Updates** (~3–4 hours)
-- [ ] Update existing tests to pass default mode
-- [ ] Add new mode-specific tests (vertex + cell for each geometry type)
-- [ ] Add mode parsing and normalization tests
-- [ ] Run full test suite: `cargo test`
+**Phase 5: Test Updates** ✅ COMPLETE (~3–4 hours)
+- [x] Updated existing tests to pass default mode
+- [x] Added new mode-specific tests (vertex + cell for decimated surfaces)
+- [x] Added mode parsing and normalization tests
+- [x] Run full test suite: `cargo test` (passes except pre-existing unicode logger test)
+- [x] Add arbitrary plane mode tests (including cell-mode reject and fringe interaction)
 
-**Phase 6: Documentation** (~1–2 hours)
-- [ ] Update PLOT3D_COMMANDS.md with new command signatures
-- [ ] Add mode semantics and use-case documentation to IBLANK_FILTERING_IMPLEMENTATION.md
-- [ ] Document fringe interaction and decimation order
+**Phase 6: Documentation** ✅ COMPLETE (~1–2 hours)
+- [x] Update PLOT3D_COMMANDS.md with new command signatures
+- [x] Add mode semantics and use-case documentation to IBLANK_FILTERING_IMPLEMENTATION.md
+- [x] Document fringe interaction and decimation order
 
 **Total Estimated Effort**: ~13–20 hours (including testing and documentation)
 

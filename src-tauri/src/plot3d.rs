@@ -291,12 +291,14 @@ impl Plot3DGrid {
         plane_normal: [f32; 3],
         respect_iblank: bool,
         show_fringe_points: bool,
+        iblank_filter_mode: crate::IblankFilterMode,
     ) -> Result<MeshGeometry, String> {
         let mut mesh = self.slice_arbitrary_plane_with_solution(
             plane_point,
             plane_normal,
             respect_iblank,
             show_fringe_points,
+            iblank_filter_mode,
         )?;
         mesh.vertex_cell_data = None;
         Ok(mesh)
@@ -310,6 +312,7 @@ impl Plot3DGrid {
         plane_normal: [f32; 3],
         respect_iblank: bool,
         show_fringe_points: bool,
+        iblank_filter_mode: crate::IblankFilterMode,
     ) -> Result<MeshGeometry, String> {
         let i = self.dimensions.i as usize;
         let j = self.dimensions.j as usize;
@@ -462,6 +465,13 @@ impl Plot3DGrid {
                         point_is_blanked(corner_indices[6]),
                         point_is_blanked(corner_indices[7]),
                     ];
+
+                    // Cell-mode: skip entire cell if any corner is blanked/hidden
+                    if matches!(iblank_filter_mode, crate::IblankFilterMode::Cell) {
+                        if corner_blanked.iter().any(|&b| b) {
+                            continue; // Skip entire cell
+                        }
+                    }
 
                     // Get the 8 corners of the hexahedron
                     let corners = [
@@ -2647,7 +2657,13 @@ mod tests {
         // Plane exactly at z=0 (bottom face)
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [0.0, 0.0, 1.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(result.is_ok(), "Should intersect aligned face");
         let mesh = result.unwrap();
         assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
@@ -2672,7 +2688,13 @@ mod tests {
         // Plane along x=0 edge
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [1.0, 0.0, 0.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(result.is_ok(), "Should intersect aligned edge");
         let mesh = result.unwrap();
         assert!(mesh.vertices.len() > 0, "Should have intersection vertices");
@@ -2697,7 +2719,13 @@ mod tests {
         // Plane at z=0 (bottom face), should produce duplicate points at corners
         let plane_point = [0.0, 0.0, 0.0];
         let plane_normal = [0.0, 0.0, 1.0];
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(result.is_ok(), "Should intersect aligned face");
         let mesh = result.unwrap();
         // Check that duplicate points are not present (all points are unique)
@@ -2722,7 +2750,13 @@ mod tests {
         let plane_point = [0.0, 0.0, 0.5];
         let plane_normal = [0.0, 0.0, 1.0];
         let mesh = grid
-            .slice_arbitrary_plane(plane_point, plane_normal, false, false)
+            .slice_arbitrary_plane(
+                plane_point,
+                plane_normal,
+                false,
+                false,
+                crate::IblankFilterMode::Vertex,
+            )
             .expect("Expected arbitrary plane intersection");
 
         assert_eq!(mesh.triangle_indices.len() % 3, 0);
@@ -2791,7 +2825,13 @@ mod tests {
         let plane_normal = [1.0, 0.0, 0.0];
 
         let mesh = grid
-            .slice_arbitrary_plane(plane_point, plane_normal, false, false)
+            .slice_arbitrary_plane(
+                plane_point,
+                plane_normal,
+                false,
+                false,
+                crate::IblankFilterMode::Vertex,
+            )
             .expect("Expected intersection at interior shared face");
 
         assert_eq!(mesh.vertex_count, 4, "Expected welded quad vertices");
@@ -3261,7 +3301,13 @@ mod tests {
         };
 
         let mesh_respect_off = grid_respect_off
-            .slice_arbitrary_plane_with_solution([0.0, 0.0, 0.5], [0.0, 0.0, 1.0], false, true)
+            .slice_arbitrary_plane_with_solution(
+                [0.0, 0.0, 0.5],
+                [0.0, 0.0, 1.0],
+                false,
+                true,
+                crate::IblankFilterMode::Vertex,
+            )
             .expect("arbitrary slice should succeed when not respecting iblank");
         assert!(mesh_respect_off.vertex_count > 0);
         assert!(mesh_respect_off.face_count > 0);
@@ -3279,9 +3325,114 @@ mod tests {
             [0.0, 0.0, 1.0],
             true,
             true,
+            crate::IblankFilterMode::Vertex,
         );
         assert!(result_respect_on.is_err());
         assert!(result_respect_on
+            .err()
+            .unwrap_or_default()
+            .contains("No intersection found"));
+    }
+
+    #[test]
+    fn test_arbitrary_plane_cell_mode_rejects_cells_with_blanked_corners() {
+        // Create a 3x3x3 grid
+        let mut x_coords = Vec::new();
+        let mut y_coords = Vec::new();
+        let mut z_coords = Vec::new();
+        for k in 0..3 {
+            for j in 0..3 {
+                for i in 0..3 {
+                    x_coords.push(i as f32);
+                    y_coords.push(j as f32);
+                    z_coords.push(k as f32);
+                }
+            }
+        }
+
+        // IBLANK array: all normal (1) except corner (0,0,0) which is blanked (0)
+        let mut iblank = vec![1; 27];
+        let blanked_idx = 0; // i=0, j=0, k=0
+        iblank[blanked_idx] = 0;
+
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 3 },
+            x_coords,
+            y_coords,
+            z_coords,
+            iblank: Some(iblank),
+        };
+
+        // Slice at z=0.5 plane (intersects k=0-1 cells)
+        // In vertex mode: edges to blanked corner are skipped
+        let mesh_vertex = grid
+            .slice_arbitrary_plane_with_solution(
+                [0.0, 0.0, 0.5],
+                [0.0, 0.0, 1.0],
+                true,
+                true,
+                crate::IblankFilterMode::Vertex,
+            )
+            .expect("vertex mode slice should succeed");
+
+        // In cell mode: any intersected cell with a blanked corner is completely rejected
+        let mesh_cell = grid
+            .slice_arbitrary_plane_with_solution(
+                [0.0, 0.0, 0.5],
+                [0.0, 0.0, 1.0],
+                true,
+                true,
+                crate::IblankFilterMode::Cell,
+            )
+            .expect("cell mode slice should succeed");
+
+        // Cell mode should have fewer triangles because entire cells are rejected
+        assert!(
+            mesh_cell.face_count < mesh_vertex.face_count,
+            "Cell mode should reject entire cells, resulting in fewer triangles than vertex mode"
+        );
+    }
+
+    #[test]
+    fn test_arbitrary_plane_cell_mode_hides_fringe_cells_when_fringe_hidden() {
+        let x_coords = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        let y_coords = vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+        let z_coords = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+
+        // Single fringe corner in a single-cell grid
+        let mut iblank = vec![1; 8];
+        iblank[0] = -1;
+
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords,
+            y_coords,
+            z_coords,
+            iblank: Some(iblank),
+        };
+
+        // In cell mode, showing fringe should keep the cell visible
+        let mesh_show_fringe = grid
+            .slice_arbitrary_plane_with_solution(
+                [0.0, 0.0, 0.5],
+                [0.0, 0.0, 1.0],
+                true,
+                true,
+                crate::IblankFilterMode::Cell,
+            )
+            .expect("cell mode slice should succeed when fringe points are visible");
+        assert!(mesh_show_fringe.face_count > 0);
+
+        // In cell mode, hiding fringe should reject the cell entirely
+        let result_hide_fringe = grid.slice_arbitrary_plane_with_solution(
+            [0.0, 0.0, 0.5],
+            [0.0, 0.0, 1.0],
+            true,
+            false,
+            crate::IblankFilterMode::Cell,
+        );
+        assert!(result_hide_fringe.is_err());
+        assert!(result_hide_fringe
             .err()
             .unwrap_or_default()
             .contains("No intersection found"));
@@ -4003,7 +4154,13 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [0.0, 0.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(result.is_ok(), "Failed to slice grid: {:?}", result.err());
 
         let mesh = result.unwrap();
@@ -4052,7 +4209,13 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [1.0, 1.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(
             result.is_ok(),
             "Failed to slice diagonal plane: {:?}",
@@ -4101,7 +4264,13 @@ mod tests {
         let plane_point = [10.0, 10.0, 10.0];
         let plane_normal = [0.0, 0.0, 1.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(
             result.is_err(),
             "Should fail when plane doesn't intersect grid"
@@ -4122,7 +4291,13 @@ mod tests {
         let plane_point = [0.5, 0.5, 0.5];
         let plane_normal = [0.0, 0.0, 0.0];
 
-        let result = grid.slice_arbitrary_plane(plane_point, plane_normal, false, false);
+        let result = grid.slice_arbitrary_plane(
+            plane_point,
+            plane_normal,
+            false,
+            false,
+            crate::IblankFilterMode::Vertex,
+        );
         assert!(result.is_err(), "Should fail with zero normal vector");
     }
 

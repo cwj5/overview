@@ -424,3 +424,330 @@ While replicating PLOT3D's capabilities, overview can modernize the interface:
 - **overview Approach**: Modern GPU acceleration via WebGL/Three.js
 
 The goal is to preserve PLOT3D's powerful analysis capabilities while providing a modern, intuitive user experience.
+---
+
+## Tauri Command API Reference
+
+This section documents the Tauri backend commands exposed to the frontend for PLOT3D grid and solution visualization.
+
+### Core Commands
+
+#### `convert_grid_to_mesh_by_id`
+
+Converts a PLOT3D grid block to Three.js mesh geometry with optional solution field coloring.
+
+**Signature:**
+```typescript
+invoke('convert_grid_to_mesh_by_id', {
+  gridId: number,
+  blockId: number,
+  fieldIndex?: number,
+  iblankFilterMode?: 'vertex' | 'cell'
+})
+```
+
+**Parameters:**
+- `gridId` (number, required): The ID of the loaded PLOT3D grid file
+- `blockId` (number, required): The block index within the multi-block grid
+- `fieldIndex` (number, optional): Solution field index for coloring (omit for wireframe)
+- `iblankFilterMode` (string, optional): IBLANK filtering mode, defaults to `'vertex'`
+  - `'vertex'`: Filter out individual vertices/points where IBLANK indicates hidden (value 0 or -1 when fringe points are hidden)
+  - `'cell'`: Filter out entire quads/cells where any corner vertex is hidden
+
+**Returns:**
+```typescript
+{
+  vertices: number[],        // Flat array [x,y,z, x,y,z, ...]
+  indices: number[],         // Triangle indices for wireframe edges
+  triangle_indices: number[], // Triangle indices for solid surfaces
+  normals?: number[],        // Normals for lighting (if available)
+  colors?: number[]          // RGB colors per vertex (if fieldIndex provided)
+}
+```
+
+**Behavior:**
+- **Vertex Mode**: Creates an IndexMap for non-hidden vertices, remaps all geometry to compacted indices. Efficient for datasets with sparse blanking.
+- **Cell Mode**: Keeps all vertices in original positions, rejects quads where any corner has IBLANK indicating hidden. Preserves vertex alignment for simpler color mapping.
+
+---
+
+#### `compute_solution_colors`
+
+Computes per-vertex color arrays for a previously loaded mesh based on normalized solution field values.
+
+**Signature:**
+```typescript
+invoke('compute_solution_colors', {
+  gridId: number,
+  blockId: number,
+  fieldIndex: number,
+  showFringePoints?: boolean,
+  iblankFilterMode?: 'vertex' | 'cell'
+})
+```
+
+**Parameters:**
+- `gridId` (number, required): The ID of the loaded PLOT3D grid file
+- `blockId` (number, required): The block index within the multi-block grid
+- `fieldIndex` (number, required): Solution field index (0-based) to visualize
+- `showFringePoints` (boolean, optional): Whether to show fringe points (IBLANK = -1), defaults to `false`
+- `iblankFilterMode` (string, optional): IBLANK filtering mode, defaults to `'vertex'`
+
+**Returns:**
+```typescript
+{
+  colors: number[],  // Flat RGB array [r,g,b, r,g,b, ...] normalized to [0,1]
+  min: number,       // Global minimum field value across all grids
+  max: number        // Global maximum field value across all grids
+}
+```
+
+**Behavior:**
+- Uses global min/max normalization across all loaded solution files for consistent color mapping
+- **Vertex Mode**: Filters colors to exclude hidden vertices (respecting `showFringePoints` flag), resulting in compacted arrays matching vertex-mode mesh
+- **Cell Mode**: Compacts mesh vertices and colors to only those referenced by geometry indices, then updates indices to reference compacted array
+
+**Note:** Color array length must match the mesh vertices array length. The alignment logic is mode-specific:
+- Vertex mode: filter_vertex_mode_surface_colors (removes entries for hidden points)
+- Cell mode: compact_mesh_and_colors_to_used_vertices (remaps to only used vertices)
+
+---
+
+#### `compute_solution_colors_sliced`
+
+Computes colors for index-plane slices (I/J/K constant planes) extracted from the grid.
+
+**Signature:**
+```typescript
+invoke('compute_solution_colors_sliced', {
+  gridId: number,
+  blockId: number,
+  axis: 'I' | 'J' | 'K',
+  index: number,
+  fieldIndex: number,
+  showFringePoints?: boolean,
+  iblankFilterMode?: 'vertex' | 'cell'
+})
+```
+
+**Parameters:**
+- `gridId` (number, required): The ID of the loaded PLOT3D grid file
+- `blockId` (number, required): The block index within the multi-block grid
+- `axis` (string, required): Slice axis - one of `'I'`, `'J'`, or `'K'`
+- `index` (number, required): Grid index along the specified axis (0-based)
+- `fieldIndex` (number, required): Solution field index to visualize
+- `showFringePoints` (boolean, optional): Whether to show fringe points, defaults to `false`
+- `iblankFilterMode` (string, optional): IBLANK filtering mode, defaults to `'vertex'`
+
+**Returns:**
+```typescript
+{
+  colors: number[],  // RGB color array aligned with slice mesh vertices
+  min: number,       // Global minimum field value
+  max: number        // Global maximum field value
+}
+```
+
+**Behavior:**
+- Extracts 2D plane from 3D grid at specified index
+- Applies IBLANK filtering according to mode:
+  - **Vertex Mode**: Skips hidden vertices when building slice mesh
+  - **Cell Mode**: Rejects slice quads with any hidden corner
+- Color array is aligned with the resulting slice geometry
+
+---
+
+#### `compute_solution_colors_arbitrary_plane`
+
+Computes colors for arbitrary plane slices defined by point and normal vector.
+
+**Signature:**
+```typescript
+invoke('compute_solution_colors_arbitrary_plane', {
+  gridId: number,
+  blockId: number,
+  planePoint: [number, number, number],
+  planeNormal: [number, number, number],
+  fieldIndex: number,
+  showFringePoints?: boolean,
+  iblankFilterMode?: 'vertex' | 'cell'
+})
+```
+
+**Parameters:**
+- `gridId` (number, required): The ID of the loaded PLOT3D grid file
+- `blockId` (number, required): The block index within the multi-block grid
+- `planePoint` (array, required): 3D point [x, y, z] that the plane passes through
+- `planeNormal` (array, required): Normal vector [nx, ny, nz] defining plane orientation
+- `fieldIndex` (number, required): Solution field index to visualize
+- `showFringePoints` (boolean, optional): Whether to show fringe points, defaults to `false`
+- `iblankFilterMode` (string, optional): IBLANK filtering mode, defaults to `'vertex'`
+
+**Returns:**
+```typescript
+{
+  colors: number[],  // RGB color array for arbitrary plane intersection
+  min: number,       // Global minimum field value
+  max: number        // Global maximum field value
+}
+```
+
+**Behavior:**
+- Intersects arbitrary plane with grid cells to create slice geometry
+- **Vertex Mode**: Standard intersection logic with per-vertex IBLANK checks
+- **Cell Mode**: Early rejection of cells where all 8 corners are hidden before computing intersection geometry
+- Interpolates solution field values at intersection points
+- Returns colors aligned with the generated intersection mesh
+
+---
+
+#### `slice_arbitrary_plane_by_id`
+
+Generates mesh geometry for an arbitrary plane slice through the grid.
+
+**Signature:**
+```typescript
+invoke('slice_arbitrary_plane_by_id', {
+  gridId: number,
+  blockId: number,
+  planePoint: [number, number, number],
+  planeNormal: [number, number, number],
+  iblankFilterMode?: 'vertex' | 'cell'
+})
+```
+
+**Parameters:**
+- `gridId` (number, required): The ID of the loaded PLOT3D grid file
+- `blockId` (number, required): The block index within the multi-block grid
+- `planePoint` (array, required): 3D point [x, y, z] on the cutting plane
+- `planeNormal` (array, required): Normal vector [nx, ny, nz] of the cutting plane
+- `iblankFilterMode` (string, optional): IBLANK filtering mode, defaults to `'vertex'`
+
+**Returns:**
+```typescript
+{
+  vertices: number[],        // Intersection vertices [x,y,z, ...]
+  indices: number[],         // Line indices for wireframe
+  triangle_indices: number[], // Triangle indices for surface
+  normals?: number[]         // Normals (typically aligned with plane normal)
+}
+```
+
+**Behavior:**
+- Computes intersection of plane with each grid cell
+- **Vertex Mode**: Standard Marching Cubes-style intersection
+- **Cell Mode**: Skips cells where all 8 corners are hidden (optimization + filtering)
+- Generates triangle mesh from intersection polygons
+
+---
+
+### IBLANK Filtering Modes
+
+The `iblank_filter_mode` parameter controls how IBLANK arrays (blanking arrays in PLOT3D grid files) are used to filter geometry:
+
+#### **Vertex Mode** (`'vertex'`)
+- **Filtering Strategy**: Individual vertices/points are filtered based on their IBLANK value
+- **Hidden Criteria**: A point is hidden if:
+  - `IBLANK[idx] == 0` (always hidden)
+  - `IBLANK[idx] == -1` AND `show_fringe_points == false` (fringe point, conditionally hidden)
+- **Geometry Impact**: 
+  - Vertices are compacted to only non-hidden points
+  - Indices are remapped to the compacted vertex array
+  - Quads/cells are included if they have at least some visible vertices
+- **Use Cases**: 
+  - Fine-grained control over point visibility
+  - Efficient for datasets with many isolated blanked points
+  - Preserves partial cells at blanking boundaries
+
+#### **Cell Mode** (`'cell'`)
+- **Filtering Strategy**: Entire quads/cells are filtered based on corner vertices
+- **Hidden Criteria**: A quad/cell is rejected if ANY corner vertex is hidden
+- **Geometry Impact**:
+  - All vertices initially retained at original indices
+  - Quads with any hidden corner are discarded
+  - For surfaces: Final compaction removes unused vertices and remaps indices
+  - For arbitrary planes: Early rejection before expensive intersection tests
+- **Use Cases**:
+  - Conservative blanking (avoid partial cells)
+  - Cleaner boundaries at blanking interfaces
+  - Performance optimization for arbitrary planes (early cell rejection)
+
+#### **Mode Selection Guidelines**
+- **Vertex Mode**: Default for most visualizations, shows maximum detail
+- **Cell Mode**: For cleaner visualization when partial cells at boundaries are undesirable, or when performance is critical for arbitrary plane slicing
+
+#### **Implementation Details**
+- Both modes respect the `show_fringe_points` flag for IBLANK = -1 handling
+- Global min/max normalization ensures consistent colors across modes
+- Color arrays are always length-aligned with final mesh vertex arrays
+- Mode parameter is optional; defaults to `'vertex'` for backward compatibility
+
+---
+
+### Supporting Commands
+
+#### `load_plot3d_grid`
+Loads a PLOT3D grid file (XYZ format, structured or unstructured).
+
+**Signature:**
+```typescript
+invoke('load_plot3d_grid', { filePath: string })
+```
+
+**Returns:** `{ gridId: number }`
+
+---
+
+#### `load_plot3d_solution`
+Loads a PLOT3D solution file (Q format) associated with a grid.
+
+**Signature:**
+```typescript
+invoke('load_plot3d_solution', { 
+  gridId: number, 
+  filePath: string 
+})
+```
+
+**Returns:** `{ success: boolean }`
+
+---
+
+#### `get_grid_blocks`
+Retrieves metadata about blocks in a loaded grid.
+
+**Signature:**
+```typescript
+invoke('get_grid_blocks', { gridId: number })
+```
+
+**Returns:**
+```typescript
+{
+  blocks: Array<{
+    id: number,
+    dimensions: [number, number, number]  // [imax, jmax, kmax]
+  }>
+}
+```
+
+---
+
+#### `get_solution_fields`
+Lists available solution fields and their metadata.
+
+**Signature:**
+```typescript
+invoke('get_solution_fields', { gridId: number })
+```
+
+**Returns:**
+```typescript
+{
+  fields: Array<{
+    index: number,
+    name: string,
+    description?: string
+  }>
+}
+```
