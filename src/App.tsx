@@ -92,6 +92,7 @@ const App = () => {
   const [hasSolution, setHasSolution] = useState(false);
   const [ignoreIblank, setIgnoreIblank] = useState(false);
   const [showFringePoints, setShowFringePoints] = useState(true);
+  const [iblankFilterMode, setIblankFilterMode] = useState<'vertex' | 'cell'>('vertex');
   const [currentScalarField, setCurrentScalarField] = useState<ScalarField>('none');
   const [currentColorScheme, setCurrentColorScheme] = useState<ColorScheme>('viridis');
   const [showWireframe, setShowWireframe] = useState(true);
@@ -255,6 +256,27 @@ const App = () => {
           },
         });
 
+        // IBLANK filter mode selector (mutually exclusive)
+        const vertexModeItem = await CheckMenuItem.new({
+          id: "iblank-mode-vertex",
+          text: "IBLANK Filter: Vertex Mode",
+          enabled: hasIblankData,
+          checked: iblankFilterMode === 'vertex',
+          action: () => {
+            setIblankFilterMode('vertex');
+          },
+        });
+
+        const cellModeItem = await CheckMenuItem.new({
+          id: "iblank-mode-cell",
+          text: "IBLANK Filter: Cell Mode",
+          enabled: hasIblankData,
+          checked: iblankFilterMode === 'cell',
+          action: () => {
+            setIblankFilterMode('cell');
+          },
+        });
+
         // Wireframe option
         const wireframeItem = await CheckMenuItem.new({
           id: "show-wireframe",
@@ -283,6 +305,8 @@ const App = () => {
           items: [
             ignoreIblankItem,
             showFringePointsItem,
+            vertexModeItem,
+            cellModeItem,
             separator,
             wireframeItem,
             smoothShadingItem,
@@ -300,7 +324,7 @@ const App = () => {
     };
 
     setupMenu();
-  }, [hasIblankData, ignoreIblank, showFringePoints, showWireframe, shadingMode]);
+  }, [hasIblankData, ignoreIblank, showFringePoints, iblankFilterMode, showWireframe, shadingMode]);
 
   // Reset ignoreIblank when IBLANK data is no longer available
   useEffect(() => {
@@ -1187,6 +1211,7 @@ const App = () => {
               isolateSelected={isolateSelected}
               ignoreIblank={ignoreIblank}
               showFringePoints={showFringePoints}
+              iblankFilterMode={iblankFilterMode}
               scalarField={currentScalarField}
               colorScheme={currentColorScheme}
               showWireframe={showWireframe}

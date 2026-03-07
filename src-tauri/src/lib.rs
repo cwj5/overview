@@ -54,43 +54,93 @@ fn cache_solutions(solutions: &[Plot3DSolution]) {
     }
 }
 
+/// IBLANK filter mode for vertex vs cell mode rendering
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IblankFilterMode {
+    Vertex,
+    Cell,
+}
+
+impl IblankFilterMode {
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "vertex" => Ok(IblankFilterMode::Vertex),
+            "cell" => Ok(IblankFilterMode::Cell),
+            _ => Err(format!(
+                "Invalid IBLANK filter mode: '{}'. Expected 'vertex' or 'cell'",
+                s
+            )),
+        }
+    }
+}
+
 fn normalize_iblank_flags(
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
-) -> (bool, bool) {
+    iblank_filter_mode: Option<String>,
+) -> (bool, bool, IblankFilterMode) {
     let effective_respect_iblank = respect_iblank.unwrap_or(false);
     let effective_show_fringe_points = if effective_respect_iblank {
         show_fringe_points.unwrap_or(true)
     } else {
         true
     };
+    let effective_filter_mode = iblank_filter_mode
+        .as_deref()
+        .and_then(|m| IblankFilterMode::from_str(m).ok())
+        .unwrap_or(IblankFilterMode::Vertex);
 
-    (effective_respect_iblank, effective_show_fringe_points)
+    (
+        effective_respect_iblank,
+        effective_show_fringe_points,
+        effective_filter_mode,
+    )
 }
 
 #[cfg(test)]
 mod iblank_flag_tests {
-    use super::normalize_iblank_flags;
+    use super::{normalize_iblank_flags, IblankFilterMode};
 
     #[test]
     fn normalize_defaults_to_no_respect_and_show_fringe() {
-        let (respect, show_fringe) = normalize_iblank_flags(None, None);
+        let (respect, show_fringe, mode) = normalize_iblank_flags(None, None, None);
         assert!(!respect);
         assert!(show_fringe);
+        assert_eq!(mode, IblankFilterMode::Vertex);
     }
 
     #[test]
     fn normalize_forces_show_fringe_when_not_respecting_iblank() {
-        let (respect, show_fringe) = normalize_iblank_flags(Some(false), Some(false));
+        let (respect, show_fringe, mode) = normalize_iblank_flags(Some(false), Some(false), None);
         assert!(!respect);
         assert!(show_fringe);
+        assert_eq!(mode, IblankFilterMode::Vertex);
     }
 
     #[test]
     fn normalize_preserves_show_fringe_when_respecting_iblank() {
-        let (respect, show_fringe) = normalize_iblank_flags(Some(true), Some(false));
+        let (respect, show_fringe, mode) = normalize_iblank_flags(Some(true), Some(false), None);
         assert!(respect);
         assert!(!show_fringe);
+        assert_eq!(mode, IblankFilterMode::Vertex);
+    }
+
+    #[test]
+    fn normalize_parses_vertex_mode_correctly() {
+        let (_, _, mode) = normalize_iblank_flags(None, None, Some("vertex".to_string()));
+        assert_eq!(mode, IblankFilterMode::Vertex);
+    }
+
+    #[test]
+    fn normalize_parses_cell_mode_correctly() {
+        let (_, _, mode) = normalize_iblank_flags(None, None, Some("cell".to_string()));
+        assert_eq!(mode, IblankFilterMode::Cell);
+    }
+
+    #[test]
+    fn normalize_defaults_to_vertex_mode_on_invalid() {
+        let (_, _, mode) = normalize_iblank_flags(None, None, Some("invalid_mode".to_string()));
+        assert_eq!(mode, IblankFilterMode::Vertex); // Falls back to default
     }
 }
 
@@ -612,10 +662,11 @@ fn convert_grid_to_mesh(
     grid: Plot3DGrid,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    iblank_filter_mode: Option<String>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    let (effective_respect_iblank, effective_show_fringe_points) =
-        normalize_iblank_flags(respect_iblank, show_fringe_points);
+    let (effective_respect_iblank, effective_show_fringe_points, effective_filter_mode) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     // Emit loading start event
     let _ = window.emit("loading-start", "Converting grid to mesh...");
@@ -678,6 +729,7 @@ fn convert_grid_to_mesh(
     let mesh = grid.to_mesh_surface_geometry_decimated(
         effective_respect_iblank,
         effective_show_fringe_points,
+        effective_filter_mode,
         decimation_factor,
     );
 
@@ -794,12 +846,13 @@ fn convert_grid_to_mesh_by_id(
     gridId: String,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    iblank_filter_mode: Option<String>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     let _ = window.emit("loading-start", "Converting grid to mesh...");
 
-    let (effective_respect_iblank, effective_show_fringe_points) =
-        normalize_iblank_flags(respect_iblank, show_fringe_points);
+    let (effective_respect_iblank, effective_show_fringe_points, effective_filter_mode) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     // Load grid from cache
     let grid = {
@@ -847,6 +900,7 @@ fn convert_grid_to_mesh_by_id(
     let mesh = grid.to_mesh_surface_geometry_decimated(
         effective_respect_iblank,
         effective_show_fringe_points,
+        effective_filter_mode,
         decimation_factor,
     );
 
@@ -891,10 +945,11 @@ fn slice_arbitrary_plane_by_id(
     planeNormal: [f32; 3],
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    iblank_filter_mode: Option<String>,
     _window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
-    let (effective_respect_iblank, effective_show_fringe_points) =
-        normalize_iblank_flags(respect_iblank, show_fringe_points);
+    let (effective_respect_iblank, effective_show_fringe_points, _effective_filter_mode) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     log_debug(&format!(
         "Slicing cached grid {} with arbitrary plane: point={:?}, normal={:?}",
@@ -945,14 +1000,15 @@ fn compute_solution_colors(
     colorScheme: String,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    iblank_filter_mode: Option<String>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
     use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
 
     let _ = window.emit("loading-start", format!("Computing {} field...", field));
 
-    let (effective_respect_iblank, effective_show_fringe_points) =
-        normalize_iblank_flags(respect_iblank, show_fringe_points);
+    let (effective_respect_iblank, effective_show_fringe_points, effective_filter_mode) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     // Load grid from cache
     let (grid, grid_file_path, grid_index) = {
@@ -1060,6 +1116,7 @@ fn compute_solution_colors(
     let mut mesh = grid.to_mesh_surface_geometry_decimated(
         effective_respect_iblank,
         effective_show_fringe_points,
+        effective_filter_mode,
         decimation_factor,
     );
     mesh.colors = Some(colors);
@@ -1115,6 +1172,7 @@ fn compute_solution_colors_sliced(
     colorScheme: String,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    iblank_filter_mode: Option<String>,
     global_min: Option<f32>,
     global_max: Option<f32>,
     window: WebviewWindow,
@@ -1126,8 +1184,8 @@ fn compute_solution_colors_sliced(
         format!("Computing {} field on slice...", field),
     );
 
-    let (effective_respect_iblank, effective_show_fringe_points) =
-        normalize_iblank_flags(respect_iblank, show_fringe_points);
+    let (effective_respect_iblank, effective_show_fringe_points, effective_filter_mode) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     // Load grid from cache
     let (original_grid, grid_file_path, grid_index) = {
@@ -1316,6 +1374,7 @@ fn compute_solution_colors_sliced(
     let mut mesh = sliced_grid.to_mesh_surface_geometry_decimated(
         effective_respect_iblank,
         effective_show_fringe_points,
+        effective_filter_mode,
         1,
     );
     mesh.colors = Some(colors);
@@ -1382,6 +1441,7 @@ fn compute_solution_colors_arbitrary_plane(
     colorScheme: String,
     respect_iblank: Option<bool>,
     show_fringe_points: Option<bool>,
+    iblank_filter_mode: Option<String>,
     global_min: Option<f32>,
     global_max: Option<f32>,
     window: WebviewWindow,
@@ -1393,8 +1453,8 @@ fn compute_solution_colors_arbitrary_plane(
         format!("Computing {} field on arbitrary plane...", field),
     );
 
-    let (effective_respect_iblank, effective_show_fringe_points) =
-        normalize_iblank_flags(respect_iblank, show_fringe_points);
+    let (effective_respect_iblank, effective_show_fringe_points, _effective_filter_mode) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points, iblank_filter_mode);
 
     // Load grid from cache
     let (grid, grid_file_path, grid_index) = {

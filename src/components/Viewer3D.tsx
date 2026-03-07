@@ -34,6 +34,7 @@ interface Viewer3DProps {
     isolateSelected: boolean;
     ignoreIblank: boolean;
     showFringePoints: boolean;
+    iblankFilterMode: 'vertex' | 'cell';
     scalarField?: ScalarField;
     colorScheme?: ColorScheme;
     showWireframe?: boolean;
@@ -353,6 +354,7 @@ export default function Viewer3D({
     isolateSelected,
     ignoreIblank,
     showFringePoints,
+    iblankFilterMode,
     scalarField = 'none',
     colorScheme = 'viridis',
     showWireframe = true,
@@ -662,6 +664,7 @@ export default function Viewer3D({
                                             planeNormal: arbitrarySlice.planeNormal,
                                             respectIblank: !ignoreIblank,
                                             showFringePoints: showFringePoints,
+                                            iblankFilterMode: iblankFilterMode,
                                             globalMin: range?.min,
                                             globalMax: range?.max,
                                         });
@@ -683,6 +686,7 @@ export default function Viewer3D({
                                             planeNormal: arbitrarySlice.planeNormal,
                                             respectIblank: !ignoreIblank,
                                             showFringePoints: showFringePoints,
+                                            iblankFilterMode: iblankFilterMode,
                                         });
                                     }
                                 } else {
@@ -693,6 +697,7 @@ export default function Viewer3D({
                                         planeNormal: arbitrarySlice.planeNormal,
                                         respectIblank: !ignoreIblank,
                                         showFringePoints: showFringePoints,
+                                        iblankFilterMode: iblankFilterMode,
                                     });
                                 }
 
@@ -749,6 +754,7 @@ export default function Viewer3D({
                                                 colorScheme: colorScheme,
                                                 respectIblank: !ignoreIblank,
                                                 showFringePoints: showFringePoints,
+                                                iblankFilterMode: iblankFilterMode,
                                                 globalMin: range?.min,
                                                 globalMax: range?.max,
                                             });
@@ -772,7 +778,8 @@ export default function Viewer3D({
                                             sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                                                 grid: slicedGrid,
                                                 respectIblank: !ignoreIblank,
-                                                showFringePoints: showFringePoints
+                                                showFringePoints: showFringePoints,
+                                                iblankFilterMode: iblankFilterMode
                                             });
                                         }
                                     } else {
@@ -785,7 +792,8 @@ export default function Viewer3D({
                                         sliceMesh = await invoke<MeshGeometry>('convert_grid_to_mesh', {
                                             grid: slicedGrid,
                                             respectIblank: !ignoreIblank,
-                                            showFringePoints: showFringePoints
+                                            showFringePoints: showFringePoints,
+                                            iblankFilterMode: iblankFilterMode
                                         });
                                     }
                                     return { sliceId: slice.id, mesh: sliceMesh };
@@ -886,6 +894,7 @@ export default function Viewer3D({
                                     colorScheme: colorScheme,
                                     respectIblank: !ignoreIblank,
                                     showFringePoints: showFringePoints,
+                                    iblankFilterMode: iblankFilterMode,
                                 });
                             } catch (invokeErr) {
                                 const invokeMsg = String(invokeErr);
@@ -896,7 +905,8 @@ export default function Viewer3D({
                             mesh = await invoke<MeshGeometry>('convert_grid_to_mesh_by_id', {
                                 gridId: gridItem.gridCacheId!,
                                 respectIblank: !ignoreIblank,
-                                showFringePoints: showFringePoints
+                                showFringePoints: showFringePoints,
+                                iblankFilterMode: iblankFilterMode
                             });
                         }
                     }

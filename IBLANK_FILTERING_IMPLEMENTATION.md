@@ -13,6 +13,8 @@
 4. [Technical Details](#technical-details)
 5. [Implementation Steps](#implementation-steps)
 6. [Verification & Testing](#verification--testing)
+7. [Known Limitations / Not in Scope](#known-limitations--not-in-scope)
+8. [Future Enhancements: Dual IBLANK Filter Modes](#future-enhancements)
 
 ---
 
@@ -448,9 +450,19 @@ let cell_has_blanked_corner = |i_idx: usize, j_idx: usize, k_idx: usize| -> bool
 
 ## Known Limitations / Not in Scope
 
-The following behaviors were explicitly excluded from this implementation scope:
+The following behaviors were explicitly excluded from **Phase 1** (vertex-mode only) implementation scope:
 
-### 1. Arbitrary-Plane Strict "Point-Hole" Mode
+### 1. Cell-Skipping Mode (NOW PLANNED, See "Future Enhancements")
+
+**Phase 1 Behavior**: Only vertex-level filtering available; holes appear at individual blanked points.
+
+**Phase 2 (Planned)**: Dual-mode toggle will allow users to switch to **Cell mode**, which skips entire quads/cells or hexahedral cells with blanked corners.
+
+**See**: [Future Enhancements → Dual IBLANK Filter Modes](#in-progress-dual-iblank-filter-modes-vertex-vs-cell) for full design and locked decisions.
+
+**Timeline**: ~13–20 hours estimated effort; prioritize based on user feedback on Phase 1.
+
+### 2. Arbitrary-Plane Strict "Point-Hole" Mode
 
 **Current Behavior**: Arbitrary-plane slicing uses **cell-level exclusion**—entire hexahedral cells are skipped if any corner vertex has `IBLANK=0`.
 
@@ -494,18 +506,223 @@ The following behaviors were explicitly excluded from this implementation scope:
 
 ## Future Enhancements
 
-### Nice-to-Have: "Skip Blanked Cells" Mode
+### IN PROGRESS: Dual IBLANK Filter Modes (Vertex vs Cell)
 
 Add an optional toggle to switch between two filtering modes:
 
-1. **Vertex-skipping mode** (default): Skip individual blanked vertices → creates holes
-2. **Cell-skipping mode**: Skip entire quads/cells with any blanked corner → removes entire regions
+1. **Vertex-skipping mode** (default): Skip individual blanked vertices → creates holes at point locations
+2. **Cell-skipping mode**: Skip entire quads/cells or hexahedral cells with any blanked/hidden corner → removes entire regions
 
-This would require:
-1. New menu option in UI
-2. Additional parameter in Tauri commands
-3. Alternative rendering logic in mesh generation functions
-4. Documentation of use cases for each mode
+**Locked Design Decisions (March 6, 2026)**:
+
+#### Scope & Coverage
+- **Apply to all geometry paths**: index slices (I/J/K), full surfaces, arbitrary planes
+- **Rationale**: Consistent user experience; same mode behavior regardless of visualization path
+
+#### Mode Transport & API Shape
+- **Use string enum** (`"vertex"` | `"cell"`) rather than boolean flag
+- **Required parameter** (not optional/fallback)
+- **Pattern**: Place mode alongside existing `respect_iblank` and `show_fringe_points` in all Tauri commands
+- **Rust parsing**: Implement `from_str()` pattern (similar to `ColorScheme` in [src-tauri/src/solution.rs](src-tauri/src/solution.rs))
+- **Rationale**: Explicit, future-proof for additional modes; no silent defaults
+
+#### Color Array Handling in Cell Mode
+- **Remapped to surviving vertices only** (smaller array, no waste)
+- **Implementation**: After mesh generation drops quads/triangles, reindex color array to only participating vertices
+- **Rationale**: Cleaner semantics; avoids unused color entries for dropped geometry
+
+#### Fringe Points + Cell Mode Interaction
+- **In Cell mode**: Fringe points (iblank < 0) treated like blanked points when `show_fringe_points=false`
+  - If a cell has a fringe corner AND `show_fringe_points=false`, reject the cell
+  - Fringe does NOT automatically protect adjacent geometry in Cell mode
+- **Rationale**: Consistent with fringe visibility toggle; respects user's intent
+
+#### Decimation Order in Cell Mode
+- **Evaluation**: Blanking/fringe evaluated on **full grid first**, then decimation subsampling applied
+- **Effect**: Gaps appear where blanked quads would be (matches current vertex-mode behavior)
+- **Rationale**: Consistent behavior across both modes; decimation is resolution reduction, not a separate filtering stage
+
+#### Menu UI Design
+- **Single SelectItem or Submenu** (not two CheckMenuItems)
+- **Placement**: View menu, mutually exclusive mode selector (e.g., "IBLANK Filter: Vertex" vs "IBLANK Filter: Cell")
+- **Visual**: Radio-button semantics; only one mode active at a time
+- **Rationale**: More professional UX; clearer mutual exclusion vs two toggles
+
+#### Empty Slice Handling
+- **Return empty MeshGeometry silently**: 0 vertices, 0 triangles, no error
+- **Behavior**: Consistent with vertex mode when all points are blanked
+- **Rationale**: Avoids error-handling complexity; frontend already handles empty meshes
+
+#### Test Strategy
+- **Update existing tests** to pass default mode parameter (`"vertex"`)
+- **Add parallel mode-specific tests** for `"cell"` behavior
+- **Single parameterized test suite** (source of truth for both modes)
+- **Test coverage**:
+  - Vertex mode: maintains current behavior
+  - Cell mode: quads/cells rejected when any corner blanked
+  - Arbitrary plane: strict 8-corner reject in cell mode
+  - Decimation interaction: gaps preserved across both modes
+  - Color alignment: colors remapped to surviving vertices in cell mode
+  - Fringe interaction: fringe corners treated as blanked in cell mode when `show_fringe_points=false`
+
+#### Arbitrary-Plane Cell-Mode Rule
+- **Strict 8-corner rejection**: Skip entire hexahedral cell if any of 8 corners is blanked (iblank=0) or hidden fringe (iblank<0 with show_fringe_points=false)
+- **Why strict over intersection-only**: Consistent whole-cell semantics; avoids partial-slice slivers; easier to reason about
+- **Implementation**: Early exit before plane-cell intersection computation if cell fails blanking check
+
+---
+
+### Implementation Architecture for Dual Modes
+
+#### Frontend Changes
+- **File**: [src/App.tsx](src/App.tsx)
+  - Add state: `const [iblankFilterMode, setIblankFilterMode] = useState<'vertex' | 'cell'>('vertex')`
+  - Extend menu setup to add mode selector (SelectItem or Submenu pattern)
+  
+- **File**: [src/components/Viewer3D.tsx](src/components/Viewer3D.tsx)
+  - Add to props: `iblankFilterMode: 'vertex' | 'cell'`
+  - Update all 6 invoke calls to include mode parameter:
+    - `convert_grid_to_mesh` (line 743)
+    - `convert_grid_to_mesh_by_id` (line 882)
+    - `compute_solution_colors` (line 882)
+    - `compute_solution_colors_sliced` (line 782)
+    - `slice_arbitrary_plane_by_id` (line 695)
+    - `compute_solution_colors_arbitrary_plane` (line 660)
+
+#### Rust Backend Changes
+- **File**: [src-tauri/src/lib.rs](src-tauri/src/lib.rs)
+  - Add `IblankFilterMode` enum (newtype wrapper around String or dedicated enum)
+  - Implement `from_str()` with validation (reject invalid mode strings)
+  - Update `normalize_iblank_flags()` to normalize three axes (respect, fringe, mode)
+  - Update all 6 Tauri command signatures:
+    - `convert_grid_to_mesh(grid, respect_iblank, show_fringe_points, iblank_filter_mode)`
+    - `convert_grid_to_mesh_by_id(gridId, respect_iblank, show_fringe_points, iblank_filter_mode)`
+    - `compute_solution_colors(gridId, solutionId, field, colorScheme, respect_iblank, show_fringe_points, iblank_filter_mode, globalMin, globalMax)`
+    - `compute_solution_colors_sliced(gridId, solutionId, slicePlane, sliceIndex, field, colorScheme, respect_iblank, show_fringe_points, iblank_filter_mode, globalMin, globalMax)`
+    - `slice_arbitrary_plane_by_id(gridId, planePoint, planeNormal, respect_iblank, show_fringe_points, iblank_filter_mode)`
+    - `compute_solution_colors_arbitrary_plane(gridId, solutionId, field, colorScheme, planePoint, planeNormal, respect_iblank, show_fringe_points, iblank_filter_mode, globalMin, globalMax)`
+  - Pass mode through to geometry generation and color functions
+
+- **File**: [src-tauri/src/plot3d.rs](src-tauri/src/plot3d.rs)
+  - Update `to_mesh_surface_geometry_decimated()` signature to include `iblank_filter_mode`
+  - Add branching logic:
+    - **Vertex mode**: Current behavior (vertex map filtering)
+    - **Cell mode**: Keep all decimated vertices, reject quads if any corner blanked/hidden
+  - Update `slice_arbitrary_plane_with_solution()` signature to include `iblank_filter_mode`
+  - Add branching logic:
+    - **Vertex mode**: Current behavior (edge-level filtering)
+    - **Cell mode**: Skip cell if any of 8 corners blanked/hidden (before intersection computation)
+  - Update helper predicates to account for fringe visibility:
+    - `is_blanked()`: Returns `true` if `iblank[idx]==0` (hole) OR (`iblank[idx]<0` AND `!show_fringe_points`)
+
+#### Color Generation Alignment
+- **File**: [src-tauri/src/lib.rs](src-tauri/src/lib.rs) (compute_solution_colors* functions)
+  - **Vertex mode**: Keep current post-filter approach (colors extracted only for non-blanked vertices)
+  - **Cell mode**: After mesh geometry is finalized with dropped triangles, reindex color array to surviving vertices only
+  - Ensure color array length always matches final `vertex_count` in returned `MeshGeometry`
+
+#### Test Updates
+- **File**: [src-tauri/src/plot3d.rs](src-tauri/src/plot3d.rs)
+  - Update existing tests (`test_mesh_geometry_iblank_filtering`, `test_surface_mesh_decimated_filters_blanked_vertices`, `test_arbitrary_plane_respect_iblank_controls_blanked_cells`) to pass `iblank_filter_mode: "vertex"`
+  - Add new tests for Cell mode:
+    - `test_surface_mesh_cell_mode_rejects_quads_with_blanked_corners`
+    - `test_arbitrary_plane_cell_mode_rejects_cells_with_blanked_corners`
+    - `test_cell_mode_with_decimation_creates_gaps`
+    - `test_cell_mode_fringe_interaction_when_hidden`
+
+- **File**: [src-tauri/src/lib.rs](src-tauri/src/lib.rs)
+  - Update normalization tests to include mode validation
+  - Add test: `test_mode_parsing_valid_and_invalid_strings`
+  - Add test: `test_mode_normalization_with_fringe`
+
+#### Documentation Updates
+- **File**: [PLOT3D_COMMANDS.md](PLOT3D_COMMANDS.md)
+  - Document all 6 updated Tauri command signatures
+  - Add `iblank_filter_mode` parameter description and valid values
+  - Explain mode behavior differences for each geometry type
+
+- **File**: [IBLANK_FILTERING_IMPLEMENTATION.md](IBLANK_FILTERING_IMPLEMENTATION.md) (this file)
+  - Document the dual-mode design in a new "Dual IBLANK Filter Modes" section
+  - Explain mode semantics, differences, and use cases
+  - Link to implementation architecture section
+
+---
+
+### Phase 3 Status (March 6, 2026)
+
+**Current Progress**:
+- ✅ Public `IblankFilterMode` enum defined in lib.rs with `from_str()` parsing
+- ✅ `to_mesh_surface_geometry_decimated()` refactored to dispatcher (routes to mode-specific implementations)
+- ✅ Created stub `to_mesh_surface_geometry_decimated_vertex_mode()` to hold existing vertex-mode logic
+
+**Next Steps** (Continue Phase 3):
+1. Update all 6 mesh function calls in lib commands to pass `effective_filter_mode`
+2. Wrap existing `to_mesh_surface_geometry_decimated_vertex_mode()` body completely
+3. Implement new `to_mesh_surface_geometry_decimated_cell_mode()` function
+4. Apply same pattern to `slice_arbitrary_plane_with_solution()` and related functions
+5. Update helper predicates (`is_blanked()`) to handle fringe visibility correctly
+
+**Key Files Being Modified**:
+- `/Users/cwj5/software/overview/src-tauri/src/lib.rs` - Command function calls
+- `/Users/cwj5/software/overview/src-tauri/src/plot3d.rs` - Geometry generation with mode branching
+
+---
+
+### Implementation Checklist
+
+**Phase 1: Frontend State & Menu** ✅ COMPLETE (~2–3 hours)
+- [x] Add `iblankFilterMode` state in App.tsx
+- [x] Extend View menu with mutually exclusive mode selector
+- [x] Add prop to Viewer3DProps
+- [x] Thread mode through all 6 invoke calls
+
+**Phase 2: Rust Enums & Command Signatures** ✅ COMPLETE (~1–2 hours)
+- [x] Define `IblankFilterMode` enum with `from_str()` in lib.rs
+- [x] Update normalize_iblank_flags to handle mode
+- [x] Update all 6 command signatures
+- [x] Pass mode through to geometry/color functions (parameter accepted, will be used in Phase 3)
+
+**Phase 3: Mesh Geometry Branching** 🚧 IN PROGRESS (~4–6 hours)
+- [x] Refactored `to_mesh_surface_geometry_decimated()` with mode branching dispatcher
+- [x] Created `to_mesh_surface_geometry_decimated_vertex_mode()` stub for existing implementation
+- [ ] Implement `to_mesh_surface_geometry_decimated_cell_mode()` function
+- [ ] Update all 6 command calls in lib.rs to pass effective_filter_mode
+- [ ] Refactor `slice_arbitrary_plane_with_solution()` with mode branching
+- [ ] Implement Cell-mode 8-corner rejection logic
+- [ ] Update helper predicates for fringe visibility
+
+**Phase 4: Color Alignment** (~2–3 hours)
+- [ ] Implement color remapping logic for Cell mode
+- [ ] Update compute_solution_colors* functions to align colors with surviving vertices
+- [ ] Validate color array length in tests
+
+**Phase 5: Test Updates** (~3–4 hours)
+- [ ] Update existing tests to pass default mode
+- [ ] Add new mode-specific tests (vertex + cell for each geometry type)
+- [ ] Add mode parsing and normalization tests
+- [ ] Run full test suite: `cargo test`
+
+**Phase 6: Documentation** (~1–2 hours)
+- [ ] Update PLOT3D_COMMANDS.md with new command signatures
+- [ ] Add mode semantics and use-case documentation to IBLANK_FILTERING_IMPLEMENTATION.md
+- [ ] Document fringe interaction and decimation order
+
+**Total Estimated Effort**: ~13–20 hours (including testing and documentation)
+
+---
+
+### Mode Behavior Reference Table
+
+| Scenario | Vertex Mode | Cell Mode |
+|----------|-------------|-----------|
+| **Blanked vertex (iblank=0)** | Vertex removed; quads dropped; hole appears | Vertex kept; quad dropped if any corner blanked; hole appears |
+| **Fringe vertex (iblank<0) with show_fringe=false** | Vertex removed; quads dropped | Vertex kept; cell dropped if fringe corner participates |
+| **Decimated grid** | Decimate → filter vertices | Decimate → evaluate blanking on decimated positions |
+| **Color array** | Remapped to non-blanked vertices | Remapped to vertices in surviving triangles |
+| **Arbitrary plane all-blanked cell** | Skip edges to blanked corners | Skip entire cell (no intersection attempted) |
+| **Empty slice result** | Empty MeshGeometry (0 vertices) | Empty MeshGeometry (0 vertices) |
+
+
 
 ---
 

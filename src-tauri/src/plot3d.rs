@@ -942,6 +942,28 @@ impl Plot3DGrid {
         &self,
         respect_iblank: bool,
         show_fringe_points: bool,
+        iblank_filter_mode: crate::IblankFilterMode,
+        decimation_factor: usize,
+    ) -> MeshGeometry {
+        match iblank_filter_mode {
+            crate::IblankFilterMode::Vertex => self.to_mesh_surface_geometry_decimated_vertex_mode(
+                respect_iblank,
+                show_fringe_points,
+                decimation_factor,
+            ),
+            crate::IblankFilterMode::Cell => self.to_mesh_surface_geometry_decimated_cell_mode(
+                respect_iblank,
+                show_fringe_points,
+                decimation_factor,
+            ),
+        }
+    }
+
+    /// Vertex-skipping mode: removes blanked vertices entirely (creates point-level holes)
+    fn to_mesh_surface_geometry_decimated_vertex_mode(
+        &self,
+        respect_iblank: bool,
+        show_fringe_points: bool,
         decimation_factor: usize,
     ) -> MeshGeometry {
         let decimation = decimation_factor.max(1);
@@ -1074,6 +1096,132 @@ impl Plot3DGrid {
             triangle_indices,
             normals,
             vertex_count: output_vertex_count as usize,
+            face_count,
+            colors: None,
+            vertex_cell_data: None,
+        }
+    }
+
+    /// Cell-skipping mode: keeps all vertices but rejects quads when any corner is blanked (creates region-level holes)
+    fn to_mesh_surface_geometry_decimated_cell_mode(
+        &self,
+        respect_iblank: bool,
+        show_fringe_points: bool,
+        decimation_factor: usize,
+    ) -> MeshGeometry {
+        let decimation = decimation_factor.max(1);
+
+        let i = self.dimensions.i as usize;
+        let j = self.dimensions.j as usize;
+        let k_idx = 0;
+
+        let i_decimated = ((i - 1) / decimation) + 1;
+        let j_decimated = ((j - 1) / decimation) + 1;
+
+        let is_hidden = |idx: usize| -> bool {
+            if let Some(ref iblank) = self.iblank {
+                if respect_iblank && iblank[idx] == 0 {
+                    return true;
+                }
+                if !show_fringe_points && iblank[idx] < 0 {
+                    return true;
+                }
+            }
+            false
+        };
+
+        let total_vertices = i_decimated * j_decimated;
+        let mut vertices = Vec::with_capacity(total_vertices * 3);
+
+        for j_step in 0..j_decimated {
+            let j_idx = (j_step * decimation).min(j - 1);
+            for i_step in 0..i_decimated {
+                let i_idx = (i_step * decimation).min(i - 1);
+                let grid_idx = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                vertices.push(self.x_coords[grid_idx]);
+                vertices.push(self.y_coords[grid_idx]);
+                vertices.push(self.z_coords[grid_idx]);
+            }
+        }
+
+        let max_quads = (i_decimated - 1) * (j_decimated - 1);
+        let mut line_indices = Vec::with_capacity(max_quads * 8);
+        let mut triangle_indices = Vec::with_capacity(max_quads * 6);
+
+        for j_step in 0..j_decimated - 1 {
+            let j_idx = (j_step * decimation).min(j - 1);
+            let j_next = ((j_step + 1) * decimation).min(j - 1);
+
+            for i_step in 0..i_decimated - 1 {
+                let i_idx = (i_step * decimation).min(i - 1);
+                let i_next = ((i_step + 1) * decimation).min(i - 1);
+
+                let idx00 = Self::linear_index(i_idx, j_idx, k_idx, i, j);
+                let idx10 = Self::linear_index(i_next, j_idx, k_idx, i, j);
+                let idx01 = Self::linear_index(i_idx, j_next, k_idx, i, j);
+                let idx11 = Self::linear_index(i_next, j_next, k_idx, i, j);
+
+                if is_hidden(idx00) || is_hidden(idx10) || is_hidden(idx01) || is_hidden(idx11) {
+                    continue;
+                }
+
+                let v00 = (j_step * i_decimated + i_step) as u32;
+                let v10 = (j_step * i_decimated + (i_step + 1)) as u32;
+                let v01 = ((j_step + 1) * i_decimated + i_step) as u32;
+                let v11 = ((j_step + 1) * i_decimated + (i_step + 1)) as u32;
+
+                line_indices.extend_from_slice(&[v00, v10, v10, v11, v11, v01, v01, v00]);
+                triangle_indices.extend_from_slice(&[v00, v10, v11, v00, v11, v01]);
+            }
+        }
+
+        let mut normals = vec![0.0f32; vertices.len()];
+        for tri in triangle_indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+
+            let v0 = [vertices[i0 * 3], vertices[i0 * 3 + 1], vertices[i0 * 3 + 2]];
+            let v1 = [vertices[i1 * 3], vertices[i1 * 3 + 1], vertices[i1 * 3 + 2]];
+            let v2 = [vertices[i2 * 3], vertices[i2 * 3 + 1], vertices[i2 * 3 + 2]];
+
+            let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+
+            let nx = e1[1] * e2[2] - e1[2] * e2[1];
+            let ny = e1[2] * e2[0] - e1[0] * e2[2];
+            let nz = e1[0] * e2[1] - e1[1] * e2[0];
+
+            for &idx in &[i0, i1, i2] {
+                normals[idx * 3] += nx;
+                normals[idx * 3 + 1] += ny;
+                normals[idx * 3 + 2] += nz;
+            }
+        }
+
+        for idx in 0..(normals.len() / 3) {
+            let nx = normals[idx * 3];
+            let ny = normals[idx * 3 + 1];
+            let nz = normals[idx * 3 + 2];
+            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            if len > 0.0 {
+                normals[idx * 3] /= len;
+                normals[idx * 3 + 1] /= len;
+                normals[idx * 3 + 2] /= len;
+            }
+        }
+
+        let face_count = triangle_indices.len() / 3;
+
+        MeshGeometry {
+            vertices,
+            indices: line_indices,
+            triangle_indices,
+            normals,
+            vertex_count: total_vertices,
             face_count,
             colors: None,
             vertex_cell_data: None,
@@ -3051,7 +3199,7 @@ mod tests {
     }
 
     #[test]
-    fn test_surface_mesh_decimated_filters_blanked_vertices() {
+    fn test_surface_mesh_decimated_vertex_mode_filters_blanked_vertices() {
         let grid = Plot3DGrid {
             dimensions: GridDimensions { i: 3, j: 3, k: 1 },
             x_coords: vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
@@ -3060,11 +3208,17 @@ mod tests {
             iblank: Some(vec![1, 1, 1, 1, 0, 1, 1, 1, 1]),
         };
 
-        let mesh_no_filter = grid.to_mesh_surface_geometry_decimated(false, true, 1);
+        let mesh_no_filter = grid.to_mesh_surface_geometry_decimated(
+            false,
+            true,
+            crate::IblankFilterMode::Vertex,
+            1,
+        );
         assert_eq!(mesh_no_filter.vertex_count, 9);
         assert_eq!(mesh_no_filter.face_count, 8);
 
-        let mesh_filtered = grid.to_mesh_surface_geometry_decimated(true, true, 1);
+        let mesh_filtered =
+            grid.to_mesh_surface_geometry_decimated(true, true, crate::IblankFilterMode::Vertex, 1);
         assert_eq!(mesh_filtered.vertex_count, 8);
         assert_eq!(mesh_filtered.face_count, 0);
         assert_eq!(mesh_filtered.vertices.len(), 8 * 3);
@@ -3073,6 +3227,23 @@ mod tests {
         for vertex in mesh_filtered.vertices.chunks(3) {
             assert!(!(vertex[0] == 1.0 && vertex[1] == 1.0 && vertex[2] == 0.0));
         }
+    }
+
+    #[test]
+    fn test_surface_mesh_decimated_cell_mode_keeps_vertices() {
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 1 },
+            x_coords: vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+            y_coords: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            z_coords: vec![0.0; 9],
+            iblank: Some(vec![1, 1, 1, 1, 0, 1, 1, 1, 1]),
+        };
+
+        let mesh_filtered =
+            grid.to_mesh_surface_geometry_decimated(true, true, crate::IblankFilterMode::Cell, 1);
+        assert_eq!(mesh_filtered.vertex_count, 9);
+        assert_eq!(mesh_filtered.vertices.len(), 9 * 3);
+        assert_eq!(mesh_filtered.face_count, 0);
     }
 
     #[test]
