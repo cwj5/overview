@@ -1,8 +1,8 @@
 # IBLANK Filtering Implementation Plan
 
 **Document Date**: March 5, 2026  
-**Status**: ✅ Implementation Complete - Awaiting Visual Verification  
-**Related Issue**: Toggle "Ignore IBLANK" not working - slices always show all points regardless of IBLANK values
+**Status**: ✅ Implementation Verified (Code + Tests + Visual)  
+**Related Issue**: Toggle "Ignore IBLANK" was previously non-functional
 
 ---
 
@@ -18,11 +18,16 @@
 
 ## Executive Summary
 
-The IBLANK data filtering code exists in the Rust backend but is non-functional—the "Ignore IBLANK" toggle has no effect on displayed geometry. All slices (index-based I/J/K planes and arbitrary planes) currently display all points regardless of their IBLANK values.
+IBLANK filtering is now implemented end-to-end in frontend and Rust backend for index slices and arbitrary planes. The "Ignore IBLANK" toggle now affects generated geometry as intended, with backend safety normalization to prevent invalid flag combinations from hiding fringe points when IBLANK is ignored.
 
-**Goal**: Implement working IBLANK filtering so that when the toggle is OFF (default), points with IBLANK=0 are excluded from visualization, creating physical holes in the mesh geometry.
+**Goal**: Ensure when the toggle is OFF (default), points with IBLANK=0 are excluded from visualization, creating physical holes in mesh geometry; when toggle is ON, IBLANK blanking is ignored.
 
 **Approach**: Filter vertices and indices at the mesh geometry generation stage (output to frontend), not at the grid cache level. Grid cache remains unchanged in Rust backend.
+
+**UI Decision Implemented (March 6, 2026)**:
+- When `Ignore IBLANK` is ON (`respectIblank=false`), `Show Fringe Points` is disabled (greyed out) in the menu
+- The prior fringe preference is preserved (no forced check/uncheck)
+- Backend normalizes flags so fringe points remain visible whenever `respectIblank=false`
 
 ---
 
@@ -402,13 +407,88 @@ let cell_has_blanked_corner = |i_idx: usize, j_idx: usize, k_idx: usize| -> bool
 ### Success Criteria
 
 - [x] Toggle "Ignore IBLANK" changes what's displayed (parameter transmission fixed)
-- [ ] IBLANK=0 points disappear when toggle is OFF (awaiting visual verification)
-- [ ] IBLANK=0 points reappear when toggle is ON (awaiting visual verification)
+- [x] IBLANK=0 points disappear when toggle is OFF
+- [x] IBLANK=0 points reappear when toggle is ON
 - [x] IBLANK=1, =2, <0 points always displayed (implemented in filtering logic)
 - [x] Holes are at individual blanked vertices, not entire regions (vertex-level filtering implemented)
 - [x] Solution coloring matches filtered geometry (color filtering implemented)
-- [ ] No visual artifacts at blanking boundaries (awaiting visual verification)
+- [x] No visual artifacts at blanking boundaries
 - [x] Decimation still works correctly with blanking (decimation-before-blanking order preserved)
+- [x] `Show Fringe Points` is disabled when `Ignore IBLANK` is ON (preference preserved)
+- [x] Backend enforces defensive normalization for `respect_iblank=false`
+- [x] Added targeted Rust tests for decimated mesh filtering and arbitrary-plane IBLANK behavior
+
+### Closeout Verification Run Log (March 6, 2026)
+
+#### Automated Checks
+
+| Check | Status | Evidence |
+|------|--------|----------|
+| Rust normalization tests (`iblank_flag_tests`) | ✅ PASS | `cargo test iblank_flag_tests -- --nocapture` |
+| Decimated mesh blanked-vertex filtering test | ✅ PASS | `cargo test test_surface_mesh_decimated_filters_blanked_vertices -- --nocapture` |
+| Arbitrary-plane respect_iblank behavior test | ✅ PASS | `cargo test test_arbitrary_plane_respect_iblank_controls_blanked_cells -- --nocapture` |
+| Frontend build/typecheck | ✅ PASS | `npm run build` |
+
+#### Manual Visual Checks (UI)
+
+| Check | Status | Notes |
+|------|--------|-------|
+| Toggle `Ignore IBLANK` OFF/ON and verify visible holes for `IBLANK=0` | ✅ PASS | Verified in interactive app session with IBLANK dataset |
+| Verify `Show Fringe Points` is disabled when `Ignore IBLANK` is ON | ✅ PASS | Control is greyed out while ignore mode is active |
+| Verify fringe preference is preserved after re-enabling IBLANK respect | ✅ PASS | Previous fringe selection restored after toggle sequence |
+| Verify index slices (I/J/K) with decimation still produce expected gaps | ✅ PASS | Visual gaps align with expected blanked regions |
+| Verify arbitrary-plane rendering/correlation with solution coloring | ✅ PASS | Plane rendering and coloring remained consistent |
+
+#### Result Summary
+
+- Code changes, automated regression checks, and manual UI validation for implemented IBLANK behavior are all passing.
+- Final sign-off is complete for this implementation scope.
+
+---
+
+## Known Limitations / Not in Scope
+
+The following behaviors were explicitly excluded from this implementation scope:
+
+### 1. Arbitrary-Plane Strict "Point-Hole" Mode
+
+**Current Behavior**: Arbitrary-plane slicing uses **cell-level exclusion**—entire hexahedral cells are skipped if any corner vertex has `IBLANK=0`.
+
+**Not Implemented**: Strict **vertex-level filtering** for arbitrary planes that would preserve the exact hole geometry by excluding only the specific edges/triangles touching blanked points.
+
+**Rationale**: 
+- Cell-level exclusion is simpler and provides consistent results
+- For most use cases, excluding cells with blanked corners adequately represents the IBLANK filtering intent
+- Implementing precise point-hole mode for arbitrary planes would require complex edge-intersection logic to handle partial cell visibility
+- Index slices (I/J/K planes) use vertex-level filtering, which is sufficient for most blanking visualization needs
+
+**Impact**: Arbitrary-plane slices may show slightly larger holes than the strict point-level blanking would suggest, as entire cells adjacent to blanked points are excluded.
+
+### 2. Independent Fringe Control While Respecting IBLANK
+
+**Current Behavior**: When `Ignore IBLANK` is ON, the `Show Fringe Points` control is disabled (greyed out) and fringe points are always visible.
+
+**Not Implemented**: Allowing users to toggle fringe visibility independently while still respecting IBLANK for normal/blanked points.
+
+**Rationale**:
+- Fringe points (negative IBLANK values) typically indicate overset grid boundaries and are almost always desired visible
+- Simplifies UI logic and reduces potential for confusing state combinations
+- Backend normalization ensures fringe points are never accidentally hidden when IBLANK filtering is disabled
+
+**Impact**: Users cannot hide fringe points while using `Ignore IBLANK` mode. If fringe-hiding is needed, users must re-enable IBLANK respect.
+
+### 3. Mixed Filtering Modes (Per-Grid IBLANK Behavior)
+
+**Current Behavior**: The `Ignore IBLANK` toggle is global—it applies uniformly to all loaded grids.
+
+**Not Implemented**: Per-grid IBLANK control allowing different grids to use different filtering behaviors simultaneously.
+
+**Rationale**:
+- Adds significant UI complexity (per-grid menus or grid-specific toggles)
+- Most multi-grid datasets have consistent IBLANK usage across all grids
+- Global toggle provides clear, predictable behavior
+
+**Impact**: Users cannot selectively ignore IBLANK for some grids while respecting it for others in the same visualization session.
 
 ---
 
@@ -436,5 +516,6 @@ This would require:
 - Negative IBLANK values are treated as fringe points connecting to other grids; treated as visible
 - IBLANK=2 (wall boundaries) are treated as normal points; always visible
 - Decimation is applied before blanking filter (decimated grid → filtered mesh)
-- Empty slices are handled gracefully (show nothing, no error)
+- Empty index slices are handled gracefully (show nothing)
+- Fully filtered arbitrary-plane intersections may return "No intersection found between plane and grid"
 - Performance is secondary to correctness for this implementation

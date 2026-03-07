@@ -54,6 +54,46 @@ fn cache_solutions(solutions: &[Plot3DSolution]) {
     }
 }
 
+fn normalize_iblank_flags(
+    respect_iblank: Option<bool>,
+    show_fringe_points: Option<bool>,
+) -> (bool, bool) {
+    let effective_respect_iblank = respect_iblank.unwrap_or(false);
+    let effective_show_fringe_points = if effective_respect_iblank {
+        show_fringe_points.unwrap_or(true)
+    } else {
+        true
+    };
+
+    (effective_respect_iblank, effective_show_fringe_points)
+}
+
+#[cfg(test)]
+mod iblank_flag_tests {
+    use super::normalize_iblank_flags;
+
+    #[test]
+    fn normalize_defaults_to_no_respect_and_show_fringe() {
+        let (respect, show_fringe) = normalize_iblank_flags(None, None);
+        assert!(!respect);
+        assert!(show_fringe);
+    }
+
+    #[test]
+    fn normalize_forces_show_fringe_when_not_respecting_iblank() {
+        let (respect, show_fringe) = normalize_iblank_flags(Some(false), Some(false));
+        assert!(!respect);
+        assert!(show_fringe);
+    }
+
+    #[test]
+    fn normalize_preserves_show_fringe_when_respecting_iblank() {
+        let (respect, show_fringe) = normalize_iblank_flags(Some(true), Some(false));
+        assert!(respect);
+        assert!(!show_fringe);
+    }
+}
+
 // ============================================================================
 // NEW: Grid and Solution Cache Architecture
 // ============================================================================
@@ -574,6 +614,9 @@ fn convert_grid_to_mesh(
     show_fringe_points: Option<bool>,
     window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
+    let (effective_respect_iblank, effective_show_fringe_points) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points);
+
     // Emit loading start event
     let _ = window.emit("loading-start", "Converting grid to mesh...");
 
@@ -633,8 +676,8 @@ fn convert_grid_to_mesh(
     }
 
     let mesh = grid.to_mesh_surface_geometry_decimated(
-        respect_iblank.unwrap_or(false),
-        show_fringe_points.unwrap_or(true),
+        effective_respect_iblank,
+        effective_show_fringe_points,
         decimation_factor,
     );
 
@@ -755,6 +798,9 @@ fn convert_grid_to_mesh_by_id(
 ) -> Result<MeshGeometry, String> {
     let _ = window.emit("loading-start", "Converting grid to mesh...");
 
+    let (effective_respect_iblank, effective_show_fringe_points) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points);
+
     // Load grid from cache
     let grid = {
         let cache = GRID_CACHE
@@ -799,8 +845,8 @@ fn convert_grid_to_mesh_by_id(
     }
 
     let mesh = grid.to_mesh_surface_geometry_decimated(
-        respect_iblank.unwrap_or(false),
-        show_fringe_points.unwrap_or(true),
+        effective_respect_iblank,
+        effective_show_fringe_points,
         decimation_factor,
     );
 
@@ -847,6 +893,9 @@ fn slice_arbitrary_plane_by_id(
     show_fringe_points: Option<bool>,
     _window: WebviewWindow,
 ) -> Result<MeshGeometry, String> {
+    let (effective_respect_iblank, effective_show_fringe_points) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points);
+
     log_debug(&format!(
         "Slicing cached grid {} with arbitrary plane: point={:?}, normal={:?}",
         gridId, planePoint, planeNormal
@@ -866,8 +915,8 @@ fn slice_arbitrary_plane_by_id(
     let result = grid.slice_arbitrary_plane(
         planePoint,
         planeNormal,
-        respect_iblank.unwrap_or(false),
-        show_fringe_points.unwrap_or(true),
+        effective_respect_iblank,
+        effective_show_fringe_points,
     );
 
     match &result {
@@ -901,6 +950,9 @@ fn compute_solution_colors(
     use solution::{compute_colors, compute_scalar_field_surface, ColorScheme, ScalarField};
 
     let _ = window.emit("loading-start", format!("Computing {} field...", field));
+
+    let (effective_respect_iblank, effective_show_fringe_points) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points);
 
     // Load grid from cache
     let (grid, grid_file_path, grid_index) = {
@@ -1006,14 +1058,14 @@ fn compute_solution_colors(
     let colors = compute_colors(&values, &scheme);
 
     let mut mesh = grid.to_mesh_surface_geometry_decimated(
-        respect_iblank.unwrap_or(false),
-        show_fringe_points.unwrap_or(true),
+        effective_respect_iblank,
+        effective_show_fringe_points,
         decimation_factor,
     );
     mesh.colors = Some(colors);
 
     // Filter colors to match blanked vertices
-    if respect_iblank.unwrap_or(false) {
+    if effective_respect_iblank {
         if let (Some(iblank), Some(colors)) = (grid.iblank.as_ref(), mesh.colors.take()) {
             let decimation = decimation_factor.max(1);
             let grid_i = grid.dimensions.i as usize;
@@ -1073,6 +1125,9 @@ fn compute_solution_colors_sliced(
         "loading-start",
         format!("Computing {} field on slice...", field),
     );
+
+    let (effective_respect_iblank, effective_show_fringe_points) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points);
 
     // Load grid from cache
     let (original_grid, grid_file_path, grid_index) = {
@@ -1259,14 +1314,14 @@ fn compute_solution_colors_sliced(
     let colors = compute_colors_with_range(&values, &scheme, global_min, global_max);
 
     let mut mesh = sliced_grid.to_mesh_surface_geometry_decimated(
-        respect_iblank.unwrap_or(false),
-        show_fringe_points.unwrap_or(true),
+        effective_respect_iblank,
+        effective_show_fringe_points,
         1,
     );
     mesh.colors = Some(colors);
 
     // Filter colors to match blanked vertices in sliced grid
-    if respect_iblank.unwrap_or(false) {
+    if effective_respect_iblank {
         if let (Some(iblank), Some(colors)) = (sliced_grid.iblank.as_ref(), mesh.colors.take()) {
             let i_slice = sliced_grid.dimensions.i as usize;
             let j_slice = sliced_grid.dimensions.j as usize;
@@ -1337,6 +1392,9 @@ fn compute_solution_colors_arbitrary_plane(
         "loading-start",
         format!("Computing {} field on arbitrary plane...", field),
     );
+
+    let (effective_respect_iblank, effective_show_fringe_points) =
+        normalize_iblank_flags(respect_iblank, show_fringe_points);
 
     // Load grid from cache
     let (grid, grid_file_path, grid_index) = {
@@ -1418,8 +1476,8 @@ fn compute_solution_colors_arbitrary_plane(
     let mut mesh = grid.slice_arbitrary_plane_with_solution(
         planePoint,
         planeNormal,
-        respect_iblank.unwrap_or(false),
-        show_fringe_points.unwrap_or(true),
+        effective_respect_iblank,
+        effective_show_fringe_points,
     )?;
 
     let vertex_cell_data = mesh

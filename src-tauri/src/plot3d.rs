@@ -3051,6 +3051,72 @@ mod tests {
     }
 
     #[test]
+    fn test_surface_mesh_decimated_filters_blanked_vertices() {
+        let grid = Plot3DGrid {
+            dimensions: GridDimensions { i: 3, j: 3, k: 1 },
+            x_coords: vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+            y_coords: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            z_coords: vec![0.0; 9],
+            iblank: Some(vec![1, 1, 1, 1, 0, 1, 1, 1, 1]),
+        };
+
+        let mesh_no_filter = grid.to_mesh_surface_geometry_decimated(false, true, 1);
+        assert_eq!(mesh_no_filter.vertex_count, 9);
+        assert_eq!(mesh_no_filter.face_count, 8);
+
+        let mesh_filtered = grid.to_mesh_surface_geometry_decimated(true, true, 1);
+        assert_eq!(mesh_filtered.vertex_count, 8);
+        assert_eq!(mesh_filtered.face_count, 0);
+        assert_eq!(mesh_filtered.vertices.len(), 8 * 3);
+
+        // Center point (1,1,0) should be removed from the output vertices.
+        for vertex in mesh_filtered.vertices.chunks(3) {
+            assert!(!(vertex[0] == 1.0 && vertex[1] == 1.0 && vertex[2] == 0.0));
+        }
+    }
+
+    #[test]
+    fn test_arbitrary_plane_respect_iblank_controls_blanked_cells() {
+        let x_coords = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        let y_coords = vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+        let z_coords = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+
+        let grid_respect_off = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords: x_coords.clone(),
+            y_coords: y_coords.clone(),
+            z_coords: z_coords.clone(),
+            iblank: Some(vec![0; 8]),
+        };
+
+        let mesh_respect_off = grid_respect_off
+            .slice_arbitrary_plane_with_solution([0.0, 0.0, 0.5], [0.0, 0.0, 1.0], false, true)
+            .expect("arbitrary slice should succeed when not respecting iblank");
+        assert!(mesh_respect_off.vertex_count > 0);
+        assert!(mesh_respect_off.face_count > 0);
+
+        let grid_respect_on = Plot3DGrid {
+            dimensions: GridDimensions { i: 2, j: 2, k: 2 },
+            x_coords,
+            y_coords,
+            z_coords,
+            iblank: Some(vec![0; 8]),
+        };
+
+        let result_respect_on = grid_respect_on.slice_arbitrary_plane_with_solution(
+            [0.0, 0.0, 0.5],
+            [0.0, 0.0, 1.0],
+            true,
+            true,
+        );
+        assert!(result_respect_on.is_err());
+        assert!(result_respect_on
+            .err()
+            .unwrap_or_default()
+            .contains("No intersection found"));
+    }
+
+    #[test]
     fn test_read_plot3d_grid_with_metadata_binary() -> io::Result<()> {
         // Create a simple binary PLOT3D grid file with Fortran record markers
         let mut temp_file = NamedTempFile::new()?;

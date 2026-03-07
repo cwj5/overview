@@ -248,7 +248,7 @@ const App = () => {
         const showFringePointsItem = await CheckMenuItem.new({
           id: "show-fringe-points",
           text: "Show Fringe Points",
-          enabled: hasIblankData,
+          enabled: hasIblankData && !ignoreIblank,
           checked: showFringePoints,
           action: () => {
             setShowFringePoints((prev) => !prev);

@@ -3,7 +3,7 @@ export interface Plot3DGrid {
     x_coords: number[];
     y_coords: number[];
     z_coords: number[];
-    iblank?: number[]; // Optional blanking array (0=blanked, 1=visible)
+    iblank?: number[]; // Optional blanking array (0=blanked, 1=normal, 2=wall, <0=fringe)
 }
 
 export interface Plot3DSolution {
